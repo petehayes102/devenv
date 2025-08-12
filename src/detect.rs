@@ -64,21 +64,27 @@ mod tests {
         let td = TempDir::new().unwrap();
         fs::write(td.path().join("Cargo.toml"), "[package]\nname='x'\n").unwrap();
         let img = detect_base_image(td.path());
-        assert_eq!(img.as_deref(), Some("rust:latest"));
+        assert_eq!(img.as_deref(), Some("rust:alpine"));
     }
 
     #[test]
     fn detects_node() {
         let td = TempDir::new().unwrap();
         fs::write(td.path().join("package.json"), "{}\n").unwrap();
-        assert_eq!(detect_base_image(td.path()).as_deref(), Some("node:20"));
+        assert_eq!(
+            detect_base_image(td.path()).as_deref(),
+            Some("node:current-alpine")
+        );
     }
 
     #[test]
     fn detects_python() {
         let td = TempDir::new().unwrap();
         fs::write(td.path().join("requirements.txt"), "requests\n").unwrap();
-        assert_eq!(detect_base_image(td.path()).as_deref(), Some("python:3.11"));
+        assert_eq!(
+            detect_base_image(td.path()).as_deref(),
+            Some("python:alpine")
+        );
     }
 
     #[test]
@@ -87,7 +93,7 @@ mod tests {
         fs::write(td.path().join("build.gradle"), "plugins {}\n").unwrap();
         assert_eq!(
             detect_base_image(td.path()).as_deref(),
-            Some("eclipse-temurin:21-jdk")
+            Some("eclipse-temurin:24-alpine")
         );
     }
 

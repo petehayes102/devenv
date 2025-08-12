@@ -3,10 +3,11 @@ mod docker;
 mod registry;
 
 use anyhow::{Context, Result, anyhow};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
 #[derive(Parser, Debug)]
 #[command(name = "devenv", version, about = "Simple dev environment manager", long_about = None)]
@@ -22,13 +23,25 @@ enum Commands {
     /// List running dev environments
     List,
     /// Start the named environment
-    Start { name: String },
+    Start(StartArgs),
     /// Stop the named environment
     Stop { name: String },
     /// Remove the environment container and unregister it
     Remove { name: String },
     /// Attach an interactive shell to the environment
     Attach { name: String },
+}
+
+#[derive(Args, Debug)]
+struct StartArgs {
+    /// Environment name
+    name: String,
+    /// Open the project in an IDE after start. Optional command, defaults to 'zed'.
+    #[arg(long, value_name = "CMD", num_args = 0..=1, default_missing_value = "zed")]
+    open: Option<String>,
+    /// Attach an interactive shell after starting the environment
+    #[arg(long)]
+    attach: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -63,7 +76,7 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Init { path } => cmd_init(path),
         Commands::List => cmd_list(),
-        Commands::Start { name } => cmd_start(&name),
+        Commands::Start(args) => cmd_start(&args.name, args.open.as_deref(), args.attach),
         Commands::Stop { name } => cmd_stop(&name),
         Commands::Remove { name } => cmd_remove(&name),
         Commands::Attach { name } => cmd_attach(&name),
@@ -151,7 +164,7 @@ fn cmd_list() -> Result<()> {
     Ok(())
 }
 
-fn cmd_start(name: &str) -> Result<()> {
+fn cmd_start(name: &str, open_cmd: Option<&str>, attach: bool) -> Result<()> {
     let path = registry::lookup_env(name)?;
     let cfg: DevEnvConfig = {
         let s = fs::read_to_string(path.join("devenv.toml"))?;
@@ -185,6 +198,15 @@ fn cmd_start(name: &str) -> Result<()> {
     }
 
     println!("Environment '{}' started.", cfg.devenv.name);
+    if let Some(cmd) = open_cmd {
+        println!("Opening project in '{cmd}'...");
+        if let Err(e) = Command::new(cmd).arg(&path).spawn() {
+            eprintln!("Failed to open IDE '{cmd}': {e}");
+        }
+    }
+    if attach {
+        return docker::docker_exec_interactive_shell(&container_name);
+    }
     Ok(())
 }
 

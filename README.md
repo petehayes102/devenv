@@ -28,12 +28,6 @@ devenv attach <name>
 devenv stop <name>
 ```
 
-Tip: attach a shell with Docker once started:
-
-```sh
-docker exec -it devenv-<name> bash  # or sh
-```
-
 ## Configuration (devenv.toml)
 A minimal config is created on `init`. You can customize it:
 
@@ -52,7 +46,7 @@ commands = ["cargo --version"]       # optional provisioning commands
 ## Commands
 - `devenv init [<path>]`: Create Dockerfile/config for a project and register it.
 - `devenv list`: List running dev environments (containers named `devenv-*`).
-- `devenv start <name>`: Build/run the environment container, mount project at `/workspace`.
+- `devenv start <name> [--open[=CMD]] [--attach]`: Build/run the environment container, mount project at `/workspace`. If `--open` is provided, opens the project directory in an IDE (defaults to `zed`; override with a custom CLI path, e.g. `--open code` or `--open /path/to/editor`). `--attach` drops you into an interactive shell in the container after it starts.
 - `devenv attach <name>`: Open an interactive shell inside the running container.
 - `devenv stop <name>`: Stop the environment container.
 - `devenv remove <name>`: Remove the environment container and unregister it.
