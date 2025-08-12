@@ -10,31 +10,31 @@ pub fn detect_base_image(project_dir: &Path) -> Option<String> {
     let check = |name: &str| root.join(name).exists();
 
     if check("Cargo.toml") {
-        return Some("rust:latest".to_string());
+        return Some("rust:alpine".to_string());
     }
     if check("package.json") {
-        return Some("node:20".to_string());
+        return Some("node:current-alpine".to_string());
     }
     if check("pyproject.toml") || check("requirements.txt") {
-        return Some("python:3.11".to_string());
+        return Some("python:alpine".to_string());
     }
     if check("go.mod") {
-        return Some("golang:1.22".to_string());
+        return Some("golang:alpine".to_string());
     }
     if check("Gemfile") {
-        return Some("ruby:3.3".to_string());
+        return Some("ruby:alpine".to_string());
     }
     if check("pom.xml") || has_gradle_files(root) {
-        return Some("eclipse-temurin:21-jdk".to_string());
+        return Some("eclipse-temurin:24-alpine".to_string());
     }
     if has_extension(root, "csproj") {
         return Some("mcr.microsoft.com/dotnet/sdk:8.0".to_string());
     }
     if check("composer.json") {
-        return Some("php:8.3-cli".to_string());
+        return Some("php:alpine".to_string());
     }
     if check("mix.exs") {
-        return Some("elixir:1.16".to_string());
+        return Some("elixir:alpine".to_string());
     }
 
     None
@@ -46,12 +46,8 @@ fn has_gradle_files(root: &Path) -> bool {
 
 fn has_extension(root: &Path, ext: &str) -> bool {
     for e in WalkDir::new(root).max_depth(2).into_iter().flatten() {
-        if e.file_type().is_file() {
-            if let Some(e2) = e.path().extension() {
-                if e2 == ext {
-                    return true;
-                }
-            }
+        if e.file_type().is_file() && e.path().extension().is_some_and(|e2| e2 == ext) {
+            return true;
         }
     }
     false

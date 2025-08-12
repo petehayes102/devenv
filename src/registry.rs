@@ -42,14 +42,12 @@ fn save_registry(reg: &Registry) -> Result<()> {
 
 pub fn register_env(name: &str, path: &Path) -> Result<()> {
     let mut reg = load_registry()?;
-    if let Some(existing) = reg.envs.get(name) {
-        if existing != path {
-            anyhow::bail!(
-                "An environment named '{}' already exists at {}",
-                name,
-                existing.display()
-            );
-        }
+    if matches!(reg.envs.get(name), Some(existing) if existing != path) {
+        anyhow::bail!(
+            "An environment named '{}' already exists at {}",
+            name,
+            reg.envs.get(name).unwrap().display()
+        );
     }
     reg.envs.insert(name.to_string(), path.to_path_buf());
     save_registry(&reg)
