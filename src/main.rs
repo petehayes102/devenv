@@ -1,6 +1,7 @@
 mod detect;
 mod docker;
 mod registry;
+mod util;
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Args, Parser, Subcommand};
@@ -8,10 +9,15 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use tracing::{info, warn};
+use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
 #[command(name = "devenv", version, about = "Simple dev environment manager", long_about = None)]
 struct Cli {
+    /// Print subprocess output and more logging
+    #[arg(global = true, short, long)]
+    verbose: bool,
     #[command(subcommand)]
     command: Commands,
 }
@@ -120,7 +126,16 @@ struct ZedRemote {
 // Default derived above
 
 fn main() -> Result<()> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_level(false)
+        .with_target(false)
+        .without_time()
+        .try_init();
     let cli = Cli::parse();
+    util::set_verbose(cli.verbose);
     match cli.command {
         Commands::Init { path } => cmd_init(path),
         Commands::List => cmd_list(),
@@ -179,9 +194,9 @@ fn cmd_init(path: Option<PathBuf>) -> Result<()> {
     if !config_path.exists() {
         let toml_str = toml::to_string_pretty(&cfg)?;
         fs::write(&config_path, toml_str)?;
-        println!("Created {}", config_path.display());
+        info!("Created {}", config_path.display());
     } else {
-        println!("Using existing {}", config_path.display());
+        info!("Using existing {}", config_path.display());
     }
 
     // Create a simple Dockerfile using the chosen image
@@ -189,14 +204,14 @@ fn cmd_init(path: Option<PathBuf>) -> Result<()> {
     if !dockerfile_path.exists() {
         let dockerfile = generate_dockerfile(&cfg.devenv);
         fs::write(&dockerfile_path, dockerfile)?;
-        println!("Created {}", dockerfile_path.display());
+        info!("Created {}", dockerfile_path.display());
     } else {
-        println!("Found existing Dockerfile; leaving it unchanged");
+        info!("Found existing Dockerfile; leaving it unchanged");
     }
 
     // Register environment
     registry::register_env(&cfg.devenv.name, &project_dir)?;
-    println!(
+    info!(
         "Registered environment '{}' at {}",
         cfg.devenv.name,
         project_dir.display()
@@ -204,12 +219,12 @@ fn cmd_init(path: Option<PathBuf>) -> Result<()> {
 
     // Optionally build image now
     let image_tag = format!("devenv-{}:latest", cfg.devenv.name);
-    println!(
+    info!(
         "Building image '{}' (FROM {})...",
         image_tag, cfg.devenv.image
     );
     docker::docker_build(&project_dir, &image_tag)?;
-    println!("Image built: {image_tag}");
+    info!("Image built: {image_tag}");
 
     Ok(())
 }
@@ -217,10 +232,10 @@ fn cmd_init(path: Option<PathBuf>) -> Result<()> {
 fn cmd_list() -> Result<()> {
     let items = docker::docker_ps_devenv()?;
     if items.is_empty() {
-        println!("No running dev environments.");
+        info!("No running dev environments.");
     } else {
         for it in items {
-            println!("{}\t{}\t{}", it.name, it.image, it.status);
+            info!("{}\t{}\t{}", it.name, it.image, it.status);
         }
     }
     Ok(())
@@ -274,7 +289,7 @@ fn cmd_start(
     let dockerfile_path = path.join("Dockerfile");
     if rebuild {
         fs::write(&dockerfile_path, &dockerfile_expected)?;
-        println!("Rebuilt {} from devenv.toml", dockerfile_path.display());
+        info!("Rebuilt {} from devenv.toml", dockerfile_path.display());
     } else if dockerfile_path.exists() {
         let current = fs::read_to_string(&dockerfile_path).unwrap_or_default();
         if current != dockerfile_expected {
@@ -282,13 +297,13 @@ fn cmd_start(
                 Some(n) => format!("devenv start {n} --rebuild"),
                 None => "devenv start --rebuild".to_string(),
             };
-            eprintln!(
+            warn!(
                 "Warning: Dockerfile is out of sync with devenv.toml. Run '{hint}' to regenerate."
             );
         }
     } else {
         fs::write(&dockerfile_path, &dockerfile_expected)?;
-        println!("Created {} from devenv.toml", dockerfile_path.display());
+        info!("Created {} from devenv.toml", dockerfile_path.display());
     }
     let image_tag = format!("devenv-{}:latest", cfg.devenv.name);
     // Ensure image is built unless skipped
@@ -299,7 +314,7 @@ fn cmd_start(
     let container_name = format!("devenv-{}", cfg.devenv.name);
     let running = docker::is_container_running(&container_name)?;
     if running {
-        println!("Environment '{}' is already running.", cfg.devenv.name);
+        info!("Environment '{}' is already running.", cfg.devenv.name);
         return Ok(());
     }
 
@@ -325,7 +340,7 @@ fn cmd_start(
 
     // Run provisioning commands if any
     if !cfg.devenv.commands.is_empty() {
-        println!("Running provisioning commands...");
+        info!("Running provisioning commands...");
         // Choose user to run provisioning
         let non_root_user = cfg
             .devenv
@@ -339,7 +354,7 @@ fn cmd_start(
             })
             .filter(|u| u != "root");
         for cmd in &cfg.devenv.commands {
-            println!("$ {cmd}");
+            info!("$ {cmd}");
             if cfg.devenv.provision_as_non_root {
                 if let Some(user) = non_root_user.as_deref() {
                     docker::docker_exec_shell_as(&container_name, user, cmd)?;
@@ -391,9 +406,9 @@ fn cmd_start(
         let _ = docker::docker_exec_shell(&container_name, &script);
     }
 
-    println!("Environment '{}' started.", cfg.devenv.name);
+    info!("Environment '{}' started.", cfg.devenv.name);
     if let Some(cmd) = open_cmd {
-        println!("Opening project in '{cmd}'...");
+        info!("Opening project in '{cmd}'...");
         let target = path.to_string_lossy().to_string();
         let _ = Command::new(cmd).arg(&target).spawn();
     }
@@ -412,14 +427,14 @@ fn cmd_stop(name: Option<&str>) -> Result<()> {
     };
     let container_name = format!("devenv-{}", effective_name);
     if !docker::container_exists(&container_name)? {
-        println!("Environment '{}' is not created.", effective_name);
+        info!("Environment '{}' is not created.", effective_name);
         return Ok(());
     }
     if docker::is_container_running(&container_name)? {
         docker::docker_stop(&container_name)?;
-        println!("Environment '{}' stopped.", effective_name);
+        info!("Environment '{}' stopped.", effective_name);
     } else {
-        println!("Environment '{}' is not running.", effective_name);
+        info!("Environment '{}' is not running.", effective_name);
     }
     Ok(())
 }
@@ -447,7 +462,7 @@ fn cmd_attach(name: Option<&str>) -> Result<()> {
             hint
         );
     }
-    println!("Attaching to '{container_name}'... (exit to detach)");
+    info!("Attaching to '{container_name}'... (exit to detach)");
     docker::docker_exec_interactive_shell(&container_name)
 }
 
@@ -462,17 +477,17 @@ fn cmd_remove(name: Option<&str>) -> Result<()> {
     if docker::container_exists(&container_name)? {
         if docker::is_container_running(&container_name)? {
             docker::docker_stop(&container_name)?;
-            println!("Stopped '{container_name}'");
+            info!("Stopped '{container_name}'");
         }
         docker::docker_remove_container(&container_name, false)?;
-        println!("Removed container '{container_name}'");
+        info!("Removed container '{container_name}'");
     } else {
-        println!("No container named '{container_name}' found.");
+        info!("No container named '{container_name}' found.");
     }
 
     match registry::unregister_env(&effective_name) {
-        Ok(true) => println!("Unregistered environment '{}'", effective_name),
-        Ok(false) => println!("Environment '{}' not found in registry.", effective_name),
+        Ok(true) => info!("Unregistered environment '{}'", effective_name),
+        Ok(false) => info!("Environment '{}' not found in registry.", effective_name),
         Err(e) => return Err(e),
     }
     Ok(())
@@ -499,16 +514,16 @@ fn cmd_restart(
     ) {
         (true, true) => {
             docker::docker_stop(&container_name)?;
-            println!("Environment '{}' stopped.", effective_name);
+            info!("Environment '{}' stopped.", effective_name);
         }
         (true, false) => {
-            println!(
+            info!(
                 "Environment '{}' is not running; starting it now.",
                 effective_name
             );
         }
         (false, _) => {
-            println!(
+            info!(
                 "Environment '{}' not created yet; starting fresh.",
                 effective_name
             );
@@ -523,23 +538,23 @@ fn cmd_build(name: Option<&str>, rebuild: bool, pull: bool) -> Result<()> {
     let dockerfile_path = path.join("Dockerfile");
     if rebuild || !dockerfile_path.exists() {
         fs::write(&dockerfile_path, &dockerfile_expected)?;
-        println!(
+        info!(
             "Dockerfile written from devenv.toml at {}",
             dockerfile_path.display()
         );
     } else {
         let current = fs::read_to_string(&dockerfile_path).unwrap_or_default();
         if current != dockerfile_expected {
-            eprintln!("Warning: Dockerfile differs from generated; consider --rebuild.");
+            warn!("Warning: Dockerfile differs from generated; consider --rebuild.");
         }
     }
     let image_tag = format!("devenv-{}:latest", cfg.devenv.name);
-    println!(
+    info!(
         "Building image '{}' (FROM {})...",
         image_tag, cfg.devenv.image
     );
     docker::docker_build_with_opts(&path, &image_tag, pull)?;
-    println!("Image built: {image_tag}");
+    info!("Image built: {image_tag}");
     Ok(())
 }
 
@@ -594,12 +609,18 @@ fn ensure_project_ssh_keys(
     let pub_key = devenv_dir.join("zed_ed25519.pub");
     if !priv_key.exists() || !pub_key.exists() {
         let label = format!("devenv-{env_name} zed");
-        let status = Command::new("ssh-keygen")
-            .args(["-t", "ed25519", "-N", "", "-C"])
+        let mut cmd = Command::new("ssh-keygen");
+        cmd.args(["-t", "ed25519", "-N", "", "-C"])
             .arg(&label)
             .args(["-f"])
-            .arg(&priv_key)
-            .status();
+            .arg(&priv_key);
+        tracing::info!(
+            "$ ssh-keygen -t ed25519 -N '' -C '{}' -f {}",
+            label,
+            priv_key.display()
+        );
+        util::configure_stdio(&mut cmd);
+        let status = cmd.status();
         if !matches!(status, Ok(s) if s.success()) {
             return Ok(None);
         }

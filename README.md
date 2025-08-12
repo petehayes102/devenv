@@ -21,7 +21,8 @@ devenv init
 # Start the environment
 # - With a name: uses the registered project
 # - Without a name: reads ./devenv.toml in the current directory
-devenv start [<name>]
+# - Add --verbose to show docker output
+devenv start [<name>] [--verbose]
 # List running dev environments
 devenv list
 # Attach a shell to a running environment
@@ -88,12 +89,16 @@ Connect from Zed:
 ## Commands
 - `devenv init [<path>]`: Create Dockerfile/config for a project and register it.
 - `devenv list`: List running dev environments (containers named `devenv-*`).
-- `devenv start [<name>] [--open[=CMD]] [--attach] [--rebuild] [--no-build]`: Build/run the environment container. When `<name>` is omitted, devenv looks for `./devenv.toml` in the current directory and derives the name/config from it. Mounts the project at `/workspace`. If `--open` is provided, opens the project directory in an IDE (defaults to `zed`; override with a custom CLI path, e.g. `--open code` or `--open /path/to/editor`). `--attach` drops you into an interactive shell in the container after it starts. `--rebuild` regenerates the Dockerfile from `devenv.toml` before building. `--no-build` skips the image build step if present.
-- `devenv attach [<name>]`: Open an interactive shell inside the running container. When `<name>` is omitted, devenv uses `./devenv.toml` in the current directory to determine the environment.
-- `devenv stop [<name>]`: Stop the environment container. When `<name>` is omitted, devenv uses `./devenv.toml` in the current directory.
-- `devenv restart [<name>] [--open[=CMD]] [--attach] [--rebuild] [--no-build]`: Stop if running, then start. Same flags and name behavior as `start`. If not running, prints an info message and starts anyway.
-- `devenv build [<name>] [--rebuild] [--pull]`: Generate Dockerfile from `devenv.toml` when `--rebuild` is set (or when Dockerfile is missing) and build the image. When `<name>` is omitted, devenv reads `./devenv.toml` in the current directory.
-- `devenv remove [<name>]`: Remove the environment container and unregister it. When `<name>` is omitted, devenv uses `./devenv.toml` in the current directory.
+- `devenv start [<name>] [--open[=CMD]] [--attach] [--rebuild] [--no-build] [--verbose]`: Build/run the environment container. When `<name>` is omitted, devenv looks for `./devenv.toml` in the current directory and derives the name/config from it. Mounts the project at `/workspace`. If `--open` is provided, opens the project directory in an IDE (defaults to `zed`; override with a custom CLI path, e.g. `--open code` or `--open /path/to/editor`). `--attach` drops you into an interactive shell in the container after it starts. `--rebuild` regenerates the Dockerfile from `devenv.toml` before building. `--no-build` skips the image build step if present. `--verbose` prints subprocess output.
+- `devenv attach [<name>] [--verbose]`: Open an interactive shell inside the running container. When `<name>` is omitted, devenv uses `./devenv.toml` in the current directory to determine the environment.
+- `devenv stop [<name>] [--verbose]`: Stop the environment container. When `<name>` is omitted, devenv uses `./devenv.toml` in the current directory.
+- `devenv restart [<name>] [--open[=CMD]] [--attach] [--rebuild] [--no-build] [--verbose]`: Stop if running, then start. Same flags and name behavior as `start`. If not running, prints an info message and starts anyway.
+- `devenv build [<name>] [--rebuild] [--pull] [--verbose]`: Generate Dockerfile from `devenv.toml` when `--rebuild` is set (or when Dockerfile is missing) and build the image. When `<name>` is omitted, devenv reads `./devenv.toml` in the current directory. `--verbose` prints subprocess output.
+- `devenv remove [<name>] [--verbose]`: Remove the environment container and unregister it. When `<name>` is omitted, devenv uses `./devenv.toml` in the current directory.
+
+### Logging
+- `--verbose`: Prints subprocess output (e.g. docker, ssh-keygen). Without it, devenv logs the high-level commands it runs and suppresses child stdout/stderr.
+- `RUST_LOG=info|warn|debug`: Controls devenv's own log level (e.g., `RUST_LOG=debug devenv start`).
 
 ---
 

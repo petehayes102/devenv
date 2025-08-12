@@ -10,31 +10,31 @@ pub fn detect_base_image(project_dir: &Path) -> Option<String> {
     let check = |name: &str| root.join(name).exists();
 
     if check("Cargo.toml") {
-        return Some("rust:alpine".to_string());
+        return Some("rust:trixie".to_string());
     }
     if check("package.json") {
-        return Some("node:current-alpine".to_string());
+        return Some("node:current-bookworm".to_string());
     }
     if check("pyproject.toml") || check("requirements.txt") {
-        return Some("python:alpine".to_string());
+        return Some("python:bookworm".to_string());
     }
     if check("go.mod") {
-        return Some("golang:alpine".to_string());
+        return Some("golang:bookworm".to_string());
     }
     if check("Gemfile") {
-        return Some("ruby:alpine".to_string());
+        return Some("ruby:bookworm".to_string());
     }
     if check("pom.xml") || has_gradle_files(root) {
-        return Some("eclipse-temurin:24-alpine".to_string());
+        return Some("eclipse-temurin:latest".to_string());
     }
     if has_extension(root, "csproj") {
         return Some("mcr.microsoft.com/dotnet/sdk:8.0".to_string());
     }
     if check("composer.json") {
-        return Some("php:alpine".to_string());
+        return Some("php:bookworm".to_string());
     }
     if check("mix.exs") {
-        return Some("elixir:alpine".to_string());
+        return Some("elixir:slim".to_string());
     }
 
     None
@@ -64,7 +64,7 @@ mod tests {
         let td = TempDir::new().unwrap();
         fs::write(td.path().join("Cargo.toml"), "[package]\nname='x'\n").unwrap();
         let img = detect_base_image(td.path());
-        assert_eq!(img.as_deref(), Some("rust:alpine"));
+        assert_eq!(img.as_deref(), Some("rust:trixie"));
     }
 
     #[test]
@@ -73,7 +73,7 @@ mod tests {
         fs::write(td.path().join("package.json"), "{}\n").unwrap();
         assert_eq!(
             detect_base_image(td.path()).as_deref(),
-            Some("node:current-alpine")
+            Some("node:current-bookworm")
         );
     }
 
@@ -83,7 +83,7 @@ mod tests {
         fs::write(td.path().join("requirements.txt"), "requests\n").unwrap();
         assert_eq!(
             detect_base_image(td.path()).as_deref(),
-            Some("python:alpine")
+            Some("python:bookworm")
         );
     }
 
@@ -93,7 +93,7 @@ mod tests {
         fs::write(td.path().join("build.gradle"), "plugins {}\n").unwrap();
         assert_eq!(
             detect_base_image(td.path()).as_deref(),
-            Some("eclipse-temurin:24-alpine")
+            Some("eclipse-temurin:latest")
         );
     }
 

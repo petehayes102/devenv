@@ -1,6 +1,9 @@
+use crate::util::configure_stdio;
 use anyhow::{Context, Result, anyhow};
+use std::ffi::OsStr;
 use std::path::Path;
 use std::process::Command;
+use tracing::info;
 
 #[derive(Debug, Clone)]
 pub struct PsItem {
@@ -10,11 +13,11 @@ pub struct PsItem {
 }
 
 pub fn docker_build(context_dir: &Path, tag: &str) -> Result<()> {
-    let status = Command::new("docker")
-        .arg("build")
-        .arg("-t")
-        .arg(tag)
-        .arg(context_dir)
+    info!("$ docker build -t {} {}", tag, context_dir.display());
+    let mut cmd = Command::new("docker");
+    cmd.arg("build").arg("-t").arg(tag).arg(context_dir);
+    configure_stdio(&mut cmd);
+    let status = cmd
         .status()
         .with_context(|| "Failed to spawn docker build")?;
     if !status.success() {
@@ -29,10 +32,10 @@ pub fn docker_build_with_opts(context_dir: &Path, tag: &str, pull: bool) -> Resu
     if pull {
         cmd.arg("--pull");
     }
+    cmd.arg("-t").arg(tag).arg(context_dir);
+    info!("$ {}", format_command_for_log(&cmd));
+    configure_stdio(&mut cmd);
     let status = cmd
-        .arg("-t")
-        .arg(tag)
-        .arg(context_dir)
         .status()
         .with_context(|| "Failed to spawn docker build")?;
     if !status.success() {
@@ -93,10 +96,11 @@ pub fn is_container_running(name: &str) -> Result<bool> {
 }
 
 pub fn docker_start(name: &str) -> Result<()> {
-    let status = Command::new("docker")
-        .args(["start", name])
-        .status()
-        .with_context(|| "Failed to run docker start")?;
+    let mut cmd = Command::new("docker");
+    cmd.args(["start", name]);
+    info!("$ {}", format_command_for_log(&cmd));
+    configure_stdio(&mut cmd);
+    let status = cmd.status().with_context(|| "Failed to run docker start")?;
     if !status.success() {
         return Err(anyhow!("docker start failed"));
     }
@@ -104,10 +108,11 @@ pub fn docker_start(name: &str) -> Result<()> {
 }
 
 pub fn docker_stop(name: &str) -> Result<()> {
-    let status = Command::new("docker")
-        .args(["stop", name])
-        .status()
-        .with_context(|| "Failed to run docker stop")?;
+    let mut cmd = Command::new("docker");
+    cmd.args(["stop", name]);
+    info!("$ {}", format_command_for_log(&cmd));
+    configure_stdio(&mut cmd);
+    let status = cmd.status().with_context(|| "Failed to run docker stop")?;
     if !status.success() {
         return Err(anyhow!("docker stop failed"));
     }
@@ -121,6 +126,8 @@ pub fn docker_remove_container(name: &str, force: bool) -> Result<()> {
         cmd.arg("-f");
     }
     cmd.arg(name);
+    info!("$ {}", format_command_for_log(&cmd));
+    configure_stdio(&mut cmd);
     let status = cmd.status().with_context(|| "Failed to run docker rm")?;
     if !status.success() {
         return Err(anyhow!("docker rm failed"));
@@ -153,6 +160,8 @@ pub fn docker_run_detached(
         .arg("-lc")
         .arg("tail -f /dev/null");
 
+    info!("$ {}", format_command_for_log(&cmd));
+    configure_stdio(&mut cmd);
     let status = cmd.status().with_context(|| "Failed to run docker run")?;
     if !status.success() {
         return Err(anyhow!("docker run failed"));
@@ -162,17 +171,20 @@ pub fn docker_run_detached(
 
 pub fn docker_exec_shell(container_name: &str, script: &str) -> Result<()> {
     // Try bash, fallback to sh
-    let status = Command::new("docker")
-        .args(["exec", container_name, "/bin/bash", "-lc", script])
-        .status();
+    let mut cmd = Command::new("docker");
+    cmd.args(["exec", container_name, "/bin/bash", "-lc", script]);
+    info!("$ {}", format_command_for_log(&cmd));
+    configure_stdio(&mut cmd);
+    let status = cmd.status();
     let ok = matches!(status, Ok(s) if s.success());
     if ok {
         return Ok(());
     }
-    let status = Command::new("docker")
-        .args(["exec", container_name, "/bin/sh", "-lc", script])
-        .status()
-        .with_context(|| "Failed to run docker exec")?;
+    let mut cmd = Command::new("docker");
+    cmd.args(["exec", container_name, "/bin/sh", "-lc", script]);
+    info!("$ {}", format_command_for_log(&cmd));
+    configure_stdio(&mut cmd);
+    let status = cmd.status().with_context(|| "Failed to run docker exec")?;
     if !status.success() {
         return Err(anyhow!("docker exec failed"));
     }
@@ -181,23 +193,28 @@ pub fn docker_exec_shell(container_name: &str, script: &str) -> Result<()> {
 
 pub fn docker_exec_shell_as(container_name: &str, user: &str, script: &str) -> Result<()> {
     // Try bash, fallback to sh
-    let status = Command::new("docker")
-        .args([
-            "exec",
-            "-u",
-            user,
-            container_name,
-            "/bin/bash",
-            "-lc",
-            script,
-        ])
-        .status();
+    let mut cmd = Command::new("docker");
+    cmd.args([
+        "exec",
+        "-u",
+        user,
+        container_name,
+        "/bin/bash",
+        "-lc",
+        script,
+    ]);
+    info!("$ {}", format_command_for_log(&cmd));
+    configure_stdio(&mut cmd);
+    let status = cmd.status();
     let ok = matches!(status, Ok(s) if s.success());
     if ok {
         return Ok(());
     }
-    let status = Command::new("docker")
-        .args(["exec", "-u", user, container_name, "/bin/sh", "-lc", script])
+    let mut cmd = Command::new("docker");
+    cmd.args(["exec", "-u", user, container_name, "/bin/sh", "-lc", script]);
+    info!("$ {}", format_command_for_log(&cmd));
+    configure_stdio(&mut cmd);
+    let status = cmd
         .status()
         .with_context(|| "Failed to run docker exec -u")?;
     if !status.success() {
@@ -224,4 +241,19 @@ pub fn docker_exec_interactive_shell(container_name: &str) -> Result<()> {
         return Err(anyhow!("failed to attach interactive shell"));
     }
     Ok(())
+}
+
+fn format_command_for_log(cmd: &Command) -> String {
+    let prog = cmd.get_program().to_string_lossy();
+    let args = cmd.get_args().map(quote_arg).collect::<Vec<_>>().join(" ");
+    format!("{} {}", prog, args)
+}
+
+fn quote_arg<S: AsRef<OsStr>>(s: S) -> String {
+    let s = s.as_ref().to_string_lossy();
+    if s.contains(' ') || s.contains('"') || s.contains('\'') {
+        format!("\"{}\"", s.replace('"', "\\\""))
+    } else {
+        s.into_owned()
+    }
 }
