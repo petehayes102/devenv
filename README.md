@@ -47,7 +47,7 @@ provision_as_non_root = true          # run provisioning commands as non-root us
 ```
 
 - The Dockerfile is generated from the selected `image` and includes basic utilities.
-- Packages are installed via `apt-get` when available; other base images are left untouched.
+- Packages are installed via `apt` when available; other base images are left untouched.
 - Dockerfile management: devenv owns the Dockerfile. If it’s out of sync with `devenv.toml`, `devenv start` will warn; use `--rebuild` to regenerate it.
 
 ### Working in the container

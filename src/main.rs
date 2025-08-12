@@ -202,7 +202,8 @@ fn cmd_init(path: Option<PathBuf>) -> Result<()> {
     // Create a simple Dockerfile using the chosen image
     let dockerfile_path = project_dir.join("Dockerfile");
     if !dockerfile_path.exists() {
-        let dockerfile = generate_dockerfile(&cfg.devenv);
+        let dockerfile =
+            generate_dockerfile(&cfg.devenv).replace("\n+                 ", "\n                 ");
         fs::write(&dockerfile_path, dockerfile)?;
         info!("Created {}", dockerfile_path.display());
     } else {
@@ -223,7 +224,7 @@ fn cmd_init(path: Option<PathBuf>) -> Result<()> {
         "Building image '{}' (FROM {})...",
         image_tag, cfg.devenv.image
     );
-    docker::docker_build(&project_dir, &image_tag)?;
+    docker::docker_build_with_opts(&project_dir, &image_tag, false, false)?;
     info!("Image built: {image_tag}");
 
     Ok(())
@@ -285,7 +286,8 @@ fn cmd_start(
     no_build: bool,
 ) -> Result<()> {
     let (path, cfg) = resolve_env_from_name_or_cwd(name)?;
-    let dockerfile_expected = generate_dockerfile(&cfg.devenv);
+    let dockerfile_expected =
+        generate_dockerfile(&cfg.devenv).replace("\n+                 ", "\n                 ");
     let dockerfile_path = path.join("Dockerfile");
     if rebuild {
         fs::write(&dockerfile_path, &dockerfile_expected)?;
@@ -308,7 +310,7 @@ fn cmd_start(
     let image_tag = format!("devenv-{}:latest", cfg.devenv.name);
     // Ensure image is built unless skipped
     if !no_build {
-        docker::docker_build(&path, &image_tag)?;
+        docker::docker_build_with_opts(&path, &image_tag, false, rebuild)?;
     }
 
     let container_name = format!("devenv-{}", cfg.devenv.name);
@@ -534,7 +536,8 @@ fn cmd_restart(
 
 fn cmd_build(name: Option<&str>, rebuild: bool, pull: bool) -> Result<()> {
     let (path, cfg) = resolve_env_from_name_or_cwd(name)?;
-    let dockerfile_expected = generate_dockerfile(&cfg.devenv);
+    let dockerfile_expected =
+        generate_dockerfile(&cfg.devenv).replace("\n+                 ", "\n                 ");
     let dockerfile_path = path.join("Dockerfile");
     if rebuild || !dockerfile_path.exists() {
         fs::write(&dockerfile_path, &dockerfile_expected)?;
@@ -553,7 +556,7 @@ fn cmd_build(name: Option<&str>, rebuild: bool, pull: bool) -> Result<()> {
         "Building image '{}' (FROM {})...",
         image_tag, cfg.devenv.image
     );
-    docker::docker_build_with_opts(&path, &image_tag, pull)?;
+    docker::docker_build_with_opts(&path, &image_tag, pull, false)?;
     info!("Image built: {image_tag}");
     Ok(())
 }
@@ -565,11 +568,14 @@ fn generate_dockerfile(dev: &DevEnv) -> String {
     lines.push(format!("FROM {}", dev.image));
     lines.push("\n# Common utilities".into());
     lines.push("RUN mkdir -p /workspace && \\".into());
-    lines.push("    (command -v apt-get >/dev/null 2>&1 && apt-get update && apt-get install -y curl ca-certificates git sudo) || true".into());
+    lines.push("    (command -v apt >/dev/null 2>&1 && apt update && apt install -y curl ca-certificates git sudo) || \\".into());
+    lines.push("    (command -v apk >/dev/null 2>&1 && apk add --no-cache curl ca-certificates git sudo) || \\".into());
+    lines.push("    (command -v dnf >/dev/null 2>&1 && dnf install -y curl ca-certificates git sudo) || \\".into());
+    lines.push("    (command -v yum >/dev/null 2>&1 && yum install -y curl ca-certificates git sudo) || true".into());
     if !dev.packages.is_empty() {
         let pkgs = dev.packages.join(" ");
         lines.push(format!(
-            "RUN (command -v apt-get >/dev/null 2>&1 && apt-get update && apt-get install -y {pkgs}) || true"
+            "RUN (command -v apt >/dev/null 2>&1 && apt update && apt install -y {pkgs}) || \\\n+                 (command -v apk >/dev/null 2>&1 && apk add --no-cache {pkgs}) || \\\n+                 (command -v dnf >/dev/null 2>&1 && dnf install -y {pkgs}) || \\\n+                 (command -v yum >/dev/null 2>&1 && yum install -y {pkgs}) || true"
         ));
     }
 
@@ -669,6 +675,6 @@ mod tests {
             ..Default::default()
         };
         let df = generate_dockerfile(&dev);
-        assert!(df.contains("apt-get install -y make git"));
+        assert!(df.contains("apt install -y make git"));
     }
 }

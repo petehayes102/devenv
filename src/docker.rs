@@ -12,25 +12,19 @@ pub struct PsItem {
     pub status: String,
 }
 
-pub fn docker_build(context_dir: &Path, tag: &str) -> Result<()> {
-    info!("$ docker build -t {} {}", tag, context_dir.display());
-    let mut cmd = Command::new("docker");
-    cmd.arg("build").arg("-t").arg(tag).arg(context_dir);
-    configure_stdio(&mut cmd);
-    let status = cmd
-        .status()
-        .with_context(|| "Failed to spawn docker build")?;
-    if !status.success() {
-        return Err(anyhow!("docker build failed"));
-    }
-    Ok(())
-}
-
-pub fn docker_build_with_opts(context_dir: &Path, tag: &str, pull: bool) -> Result<()> {
+pub fn docker_build_with_opts(
+    context_dir: &Path,
+    tag: &str,
+    pull: bool,
+    no_cache: bool,
+) -> Result<()> {
     let mut cmd = Command::new("docker");
     cmd.arg("build");
     if pull {
         cmd.arg("--pull");
+    }
+    if no_cache {
+        cmd.arg("--no-cache");
     }
     cmd.arg("-t").arg(tag).arg(context_dir);
     info!("$ {}", format_command_for_log(&cmd));
