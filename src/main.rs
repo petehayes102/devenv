@@ -219,7 +219,11 @@ fn cmd_attach(name: &str) -> Result<()> {
         anyhow::bail!("Environment '{}' does not exist.", name);
     }
     if !docker::is_container_running(&container_name)? {
-        anyhow::bail!("Environment '{}' is not running. Use 'devenv start {}' first.", name, name);
+        anyhow::bail!(
+            "Environment '{}' is not running. Use 'devenv start {}' first.",
+            name,
+            name
+        );
     }
     println!("Attaching to '{}'... (exit to detach)", container_name);
     docker::docker_exec_interactive_shell(&container_name)

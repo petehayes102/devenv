@@ -75,9 +75,9 @@ pub fn unregister_env(name: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::env;
     use std::fs;
-    use serial_test::serial;
     use tempfile::TempDir;
 
     #[test]
@@ -85,7 +85,9 @@ mod tests {
     fn register_and_lookup_roundtrip() {
         let td = TempDir::new().unwrap();
         // Isolate config in a temp XDG config home
-        unsafe { env::set_var("XDG_CONFIG_HOME", td.path()); }
+        unsafe {
+            env::set_var("XDG_CONFIG_HOME", td.path());
+        }
 
         let project = td.path().join("proj");
         fs::create_dir_all(&project).unwrap();
@@ -98,7 +100,9 @@ mod tests {
     #[serial]
     fn duplicate_name_different_path_errors() {
         let td = TempDir::new().unwrap();
-        unsafe { env::set_var("XDG_CONFIG_HOME", td.path()); }
+        unsafe {
+            env::set_var("XDG_CONFIG_HOME", td.path());
+        }
 
         let p1 = td.path().join("p1");
         let p2 = td.path().join("p2");
@@ -115,7 +119,9 @@ mod tests {
     #[serial]
     fn unregister_removes_entry() {
         let td = TempDir::new().unwrap();
-        unsafe { env::set_var("XDG_CONFIG_HOME", td.path()); }
+        unsafe {
+            env::set_var("XDG_CONFIG_HOME", td.path());
+        }
 
         let project = td.path().join("proj");
         fs::create_dir_all(&project).unwrap();

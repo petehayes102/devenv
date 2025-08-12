@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::path::Path;
 use std::process::Command;
 
@@ -38,8 +38,7 @@ pub fn docker_ps_devenv() -> Result<Vec<PsItem>> {
         return Ok(vec![]);
     }
     let s = String::from_utf8_lossy(&output.stdout);
-    Ok(s
-        .lines()
+    Ok(s.lines()
         .filter_map(|line| {
             let mut parts = line.split('\t');
             Some(PsItem {
@@ -129,8 +128,7 @@ pub fn docker_run_detached(
 
     if let Some(key) = ssh_private_key {
         // Mount the SSH key read-only
-        cmd.arg("-v")
-            .arg(format!("{}:/root/.ssh/id_rsa:ro", key));
+        cmd.arg("-v").arg(format!("{}:/root/.ssh/id_rsa:ro", key));
     }
 
     cmd.arg(image)
