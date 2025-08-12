@@ -24,12 +24,12 @@ enum Commands {
     List,
     /// Start the named environment
     Start(StartArgs),
-    /// Stop the named environment
-    Stop { name: String },
-    /// Remove the environment container and unregister it
-    Remove { name: String },
-    /// Attach an interactive shell to the environment
-    Attach { name: String },
+    /// Stop the named environment (or infer from CWD)
+    Stop { name: Option<String> },
+    /// Remove the environment container and unregister it (or infer from CWD)
+    Remove { name: Option<String> },
+    /// Attach an interactive shell to the environment (or infer from CWD)
+    Attach { name: Option<String> },
     /// Restart the environment: stop if running, then start (accepts same flags as start)
     Restart(StartArgs),
     /// Build the environment image without starting a container
@@ -38,8 +38,8 @@ enum Commands {
 
 #[derive(Args, Debug)]
 struct StartArgs {
-    /// Environment name
-    name: String,
+    /// Environment name (optional; inferred from devenv.toml in CWD when omitted)
+    name: Option<String>,
     /// Open the project in an IDE after start. Optional command, defaults to 'zed'.
     #[arg(long, value_name = "CMD", num_args = 0..=1, default_missing_value = "zed")]
     open: Option<String>,
@@ -56,8 +56,8 @@ struct StartArgs {
 
 #[derive(Args, Debug)]
 struct BuildArgs {
-    /// Environment name
-    name: String,
+    /// Environment name (optional; inferred from devenv.toml in CWD when omitted)
+    name: Option<String>,
     /// Rebuild the Dockerfile from devenv.toml before building
     #[arg(long)]
     rebuild: bool,
@@ -125,23 +125,23 @@ fn main() -> Result<()> {
         Commands::Init { path } => cmd_init(path),
         Commands::List => cmd_list(),
         Commands::Start(args) => cmd_start(
-            &args.name,
+            args.name.as_deref(),
             args.open.as_deref(),
             args.attach,
             args.rebuild,
             args.no_build,
         ),
-        Commands::Stop { name } => cmd_stop(&name),
-        Commands::Remove { name } => cmd_remove(&name),
-        Commands::Attach { name } => cmd_attach(&name),
+        Commands::Stop { name } => cmd_stop(name.as_deref()),
+        Commands::Remove { name } => cmd_remove(name.as_deref()),
+        Commands::Attach { name } => cmd_attach(name.as_deref()),
         Commands::Restart(args) => cmd_restart(
-            &args.name,
+            args.name.as_deref(),
             args.open.as_deref(),
             args.attach,
             args.rebuild,
             args.no_build,
         ),
-        Commands::Build(args) => cmd_build(&args.name, args.rebuild, args.pull),
+        Commands::Build(args) => cmd_build(args.name.as_deref(), args.rebuild, args.pull),
     }
 }
 
@@ -226,18 +226,50 @@ fn cmd_list() -> Result<()> {
     Ok(())
 }
 
+// Resolve environment by explicit name via registry, or by reading devenv.toml in CWD when name is None.
+fn resolve_env_from_name_or_cwd(name: Option<&str>) -> Result<(PathBuf, DevEnvConfig)> {
+    if let Some(n) = name {
+        let path = registry::lookup_env(n)?;
+        let s = fs::read_to_string(path.join("devenv.toml"))?;
+        let cfg: DevEnvConfig = toml::from_str(&s)?;
+        Ok((path, cfg))
+    } else {
+        let path = std::env::current_dir()?;
+        let config_path = path.join("devenv.toml");
+        if !config_path.exists() {
+            anyhow::bail!(
+                "No devenv.toml found in current directory: {}",
+                path.display()
+            );
+        }
+        let s = fs::read_to_string(&config_path)
+            .with_context(|| format!("Reading {}", config_path.display()))?;
+        let mut cfg: DevEnvConfig = toml::from_str(&s).with_context(|| "Parsing devenv.toml")?;
+        // Apply defaults similar to init
+        if cfg.devenv.name.trim().is_empty() {
+            let name = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("devenv")
+                .to_string();
+            cfg.devenv.name = name;
+        }
+        if cfg.devenv.image.trim().is_empty() {
+            cfg.devenv.image = detect::detect_base_image(&path)
+                .unwrap_or_else(|| "debian:bookworm-slim".to_string());
+        }
+        Ok((path, cfg))
+    }
+}
+
 fn cmd_start(
-    name: &str,
+    name: Option<&str>,
     open_cmd: Option<&str>,
     attach: bool,
     rebuild: bool,
     no_build: bool,
 ) -> Result<()> {
-    let path = registry::lookup_env(name)?;
-    let cfg: DevEnvConfig = {
-        let s = fs::read_to_string(path.join("devenv.toml"))?;
-        toml::from_str(&s)?
-    };
+    let (path, cfg) = resolve_env_from_name_or_cwd(name)?;
     let dockerfile_expected = generate_dockerfile(&cfg.devenv);
     let dockerfile_path = path.join("Dockerfile");
     if rebuild {
@@ -246,8 +278,12 @@ fn cmd_start(
     } else if dockerfile_path.exists() {
         let current = fs::read_to_string(&dockerfile_path).unwrap_or_default();
         if current != dockerfile_expected {
+            let hint = match name {
+                Some(n) => format!("devenv start {n} --rebuild"),
+                None => "devenv start --rebuild".to_string(),
+            };
             eprintln!(
-                "Warning: Dockerfile is out of sync with devenv.toml. Run 'devenv start {name} --rebuild' to regenerate."
+                "Warning: Dockerfile is out of sync with devenv.toml. Run '{hint}' to regenerate."
             );
         }
     } else {
@@ -367,39 +403,62 @@ fn cmd_start(
     Ok(())
 }
 
-fn cmd_stop(name: &str) -> Result<()> {
-    let container_name = format!("devenv-{name}");
+fn cmd_stop(name: Option<&str>) -> Result<()> {
+    let effective_name = if let Some(n) = name {
+        n.to_string()
+    } else {
+        let (_path, cfg) = resolve_env_from_name_or_cwd(None)?;
+        cfg.devenv.name
+    };
+    let container_name = format!("devenv-{}", effective_name);
     if !docker::container_exists(&container_name)? {
-        println!("Environment '{name}' is not created.");
+        println!("Environment '{}' is not created.", effective_name);
         return Ok(());
     }
     if docker::is_container_running(&container_name)? {
         docker::docker_stop(&container_name)?;
-        println!("Environment '{name}' stopped.");
+        println!("Environment '{}' stopped.", effective_name);
     } else {
-        println!("Environment '{name}' is not running.");
+        println!("Environment '{}' is not running.", effective_name);
     }
     Ok(())
 }
 
-fn cmd_attach(name: &str) -> Result<()> {
-    let container_name = format!("devenv-{name}");
+fn cmd_attach(name: Option<&str>) -> Result<()> {
+    let effective_name = if let Some(n) = name {
+        n.to_string()
+    } else {
+        let (_path, cfg) = resolve_env_from_name_or_cwd(None)?;
+        cfg.devenv.name
+    };
+    let container_name = format!("devenv-{}", effective_name);
     if !docker::container_exists(&container_name)? {
-        anyhow::bail!("Environment '{}' does not exist.", name);
+        anyhow::bail!("Environment '{}' does not exist.", effective_name);
     }
     if !docker::is_container_running(&container_name)? {
+        let hint = if let Some(n) = name {
+            format!("devenv start {n}")
+        } else {
+            "devenv start".to_string()
+        };
         anyhow::bail!(
-            "Environment '{}' is not running. Use 'devenv start {}' first.",
-            name,
-            name
+            "Environment '{}' is not running. Use '{}' first.",
+            effective_name,
+            hint
         );
     }
     println!("Attaching to '{container_name}'... (exit to detach)");
     docker::docker_exec_interactive_shell(&container_name)
 }
 
-fn cmd_remove(name: &str) -> Result<()> {
-    let container_name = format!("devenv-{name}");
+fn cmd_remove(name: Option<&str>) -> Result<()> {
+    let effective_name = if let Some(n) = name {
+        n.to_string()
+    } else {
+        let (_path, cfg) = resolve_env_from_name_or_cwd(None)?;
+        cfg.devenv.name
+    };
+    let container_name = format!("devenv-{}", effective_name);
     if docker::container_exists(&container_name)? {
         if docker::is_container_running(&container_name)? {
             docker::docker_stop(&container_name)?;
@@ -411,46 +470,55 @@ fn cmd_remove(name: &str) -> Result<()> {
         println!("No container named '{container_name}' found.");
     }
 
-    match registry::unregister_env(name) {
-        Ok(true) => println!("Unregistered environment '{name}'"),
-        Ok(false) => println!("Environment '{name}' not found in registry."),
+    match registry::unregister_env(&effective_name) {
+        Ok(true) => println!("Unregistered environment '{}'", effective_name),
+        Ok(false) => println!("Environment '{}' not found in registry.", effective_name),
         Err(e) => return Err(e),
     }
     Ok(())
 }
 
 fn cmd_restart(
-    name: &str,
+    name: Option<&str>,
     open_cmd: Option<&str>,
     attach: bool,
     rebuild: bool,
     no_build: bool,
 ) -> Result<()> {
-    let container_name = format!("devenv-{name}");
+    // Resolve container name from registry or current directory config
+    let effective_name = if let Some(n) = name {
+        n.to_string()
+    } else {
+        let (_path, cfg) = resolve_env_from_name_or_cwd(None)?;
+        cfg.devenv.name
+    };
+    let container_name = format!("devenv-{}", effective_name);
     match (
         docker::container_exists(&container_name)?,
         docker::is_container_running(&container_name)?,
     ) {
         (true, true) => {
             docker::docker_stop(&container_name)?;
-            println!("Environment '{name}' stopped.");
+            println!("Environment '{}' stopped.", effective_name);
         }
         (true, false) => {
-            println!("Environment '{name}' is not running; starting it now.");
+            println!(
+                "Environment '{}' is not running; starting it now.",
+                effective_name
+            );
         }
         (false, _) => {
-            println!("Environment '{name}' not created yet; starting fresh.");
+            println!(
+                "Environment '{}' not created yet; starting fresh.",
+                effective_name
+            );
         }
     }
     cmd_start(name, open_cmd, attach, rebuild, no_build)
 }
 
-fn cmd_build(name: &str, rebuild: bool, pull: bool) -> Result<()> {
-    let path = registry::lookup_env(name)?;
-    let cfg: DevEnvConfig = {
-        let s = fs::read_to_string(path.join("devenv.toml"))?;
-        toml::from_str(&s)?
-    };
+fn cmd_build(name: Option<&str>, rebuild: bool, pull: bool) -> Result<()> {
+    let (path, cfg) = resolve_env_from_name_or_cwd(name)?;
     let dockerfile_expected = generate_dockerfile(&cfg.devenv);
     let dockerfile_path = path.join("Dockerfile");
     if rebuild || !dockerfile_path.exists() {
