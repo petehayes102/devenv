@@ -37,7 +37,7 @@ struct DevEnvConfig {
     devenv: DevEnv,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct DevEnv {
     /// Unique environment name (defaults to directory name)
     #[serde(default)]
@@ -56,17 +56,7 @@ struct DevEnv {
     commands: Vec<String>,
 }
 
-impl Default for DevEnv {
-    fn default() -> Self {
-        DevEnv {
-            name: String::new(),
-            image: String::new(),
-            ssh_private_key: None,
-            packages: vec![],
-            commands: vec![],
-        }
-    }
-}
+// Default derived above
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -144,7 +134,7 @@ fn cmd_init(path: Option<PathBuf>) -> Result<()> {
         image_tag, cfg.devenv.image
     );
     docker::docker_build(&project_dir, &image_tag)?;
-    println!("Image built: {}", image_tag);
+    println!("Image built: {image_tag}");
 
     Ok(())
 }
@@ -189,7 +179,7 @@ fn cmd_start(name: &str) -> Result<()> {
     if !cfg.devenv.commands.is_empty() {
         println!("Running provisioning commands...");
         for cmd in &cfg.devenv.commands {
-            println!("$ {}", cmd);
+            println!("$ {cmd}");
             docker::docker_exec_shell(&container_name, cmd)?;
         }
     }
@@ -199,22 +189,22 @@ fn cmd_start(name: &str) -> Result<()> {
 }
 
 fn cmd_stop(name: &str) -> Result<()> {
-    let container_name = format!("devenv-{}", name);
+    let container_name = format!("devenv-{name}");
     if !docker::container_exists(&container_name)? {
-        println!("Environment '{}' is not created.", name);
+        println!("Environment '{name}' is not created.");
         return Ok(());
     }
     if docker::is_container_running(&container_name)? {
         docker::docker_stop(&container_name)?;
-        println!("Environment '{}' stopped.", name);
+        println!("Environment '{name}' stopped.");
     } else {
-        println!("Environment '{}' is not running.", name);
+        println!("Environment '{name}' is not running.");
     }
     Ok(())
 }
 
 fn cmd_attach(name: &str) -> Result<()> {
-    let container_name = format!("devenv-{}", name);
+    let container_name = format!("devenv-{name}");
     if !docker::container_exists(&container_name)? {
         anyhow::bail!("Environment '{}' does not exist.", name);
     }
@@ -225,26 +215,26 @@ fn cmd_attach(name: &str) -> Result<()> {
             name
         );
     }
-    println!("Attaching to '{}'... (exit to detach)", container_name);
+    println!("Attaching to '{container_name}'... (exit to detach)");
     docker::docker_exec_interactive_shell(&container_name)
 }
 
 fn cmd_remove(name: &str) -> Result<()> {
-    let container_name = format!("devenv-{}", name);
+    let container_name = format!("devenv-{name}");
     if docker::container_exists(&container_name)? {
         if docker::is_container_running(&container_name)? {
             docker::docker_stop(&container_name)?;
-            println!("Stopped '{}'", container_name);
+            println!("Stopped '{container_name}'");
         }
         docker::docker_remove_container(&container_name, false)?;
-        println!("Removed container '{}'", container_name);
+        println!("Removed container '{container_name}'");
     } else {
-        println!("No container named '{}' found.", container_name);
+        println!("No container named '{container_name}' found.");
     }
 
     match registry::unregister_env(name) {
-        Ok(true) => println!("Unregistered environment '{}'", name),
-        Ok(false) => println!("Environment '{}' not found in registry.", name),
+        Ok(true) => println!("Unregistered environment '{name}'"),
+        Ok(false) => println!("Environment '{name}' not found in registry."),
         Err(e) => return Err(e),
     }
     Ok(())
@@ -259,8 +249,7 @@ fn generate_dockerfile(dev: &DevEnv) -> String {
     if !dev.packages.is_empty() {
         let pkgs = dev.packages.join(" ");
         lines.push(format!(
-            "RUN (command -v apt-get >/dev/null 2>&1 && apt-get update && apt-get install -y {}) || true",
-            pkgs
+            "RUN (command -v apt-get >/dev/null 2>&1 && apt-get update && apt-get install -y {pkgs}) || true"
         ));
     }
     lines.push("RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh".into());
@@ -275,8 +264,7 @@ mod tests {
 
     #[test]
     fn dockerfile_includes_from_and_workdir() {
-        let mut dev = DevEnv::default();
-        dev.image = "debian:bookworm-slim".into();
+        let dev = DevEnv { image: "debian:bookworm-slim".into(), ..Default::default() };
         let df = generate_dockerfile(&dev);
         assert!(df.contains("FROM debian:bookworm-slim"));
         assert!(df.contains("WORKDIR /workspace"));
@@ -284,9 +272,11 @@ mod tests {
 
     #[test]
     fn dockerfile_includes_packages_when_present() {
-        let mut dev = DevEnv::default();
-        dev.image = "debian:bookworm-slim".into();
-        dev.packages = vec!["make".into(), "git".into()];
+        let dev = DevEnv {
+            image: "debian:bookworm-slim".into(),
+            packages: vec!["make".into(), "git".into()],
+            ..Default::default()
+        };
         let df = generate_dockerfile(&dev);
         assert!(df.contains("apt-get install -y make git"));
     }

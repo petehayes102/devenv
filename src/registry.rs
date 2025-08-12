@@ -15,7 +15,7 @@ fn registry_path() -> PathBuf {
     // otherwise fall back to platform default via dirs::config_dir.
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
-        .or_else(|| config_dir())
+        .or_else(config_dir)
         .unwrap_or_else(|| PathBuf::from("."));
     base.join("devenv").join("registry.json")
 }
@@ -60,7 +60,7 @@ pub fn lookup_env(name: &str) -> Result<PathBuf> {
     reg.envs
         .get(name)
         .cloned()
-        .with_context(|| format!("Environment '{}' not found in registry", name))
+        .with_context(|| format!("Environment '{name}' not found in registry"))
 }
 
 pub fn unregister_env(name: &str) -> Result<bool> {
@@ -111,7 +111,7 @@ mod tests {
 
         register_env("dup", &p1).unwrap();
         let err = register_env("dup", &p2).unwrap_err();
-        let msg = format!("{}", err);
+        let msg = format!("{err}");
         assert!(msg.contains("already exists"));
     }
 
@@ -128,7 +128,7 @@ mod tests {
         register_env("gone", &project).unwrap();
         assert!(unregister_env("gone").unwrap());
         let err = lookup_env("gone").unwrap_err();
-        let msg = format!("{}", err);
+        let msg = format!("{err}");
         assert!(msg.contains("not found"));
     }
 }

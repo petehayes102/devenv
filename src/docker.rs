@@ -128,7 +128,7 @@ pub fn docker_run_detached(
 
     if let Some(key) = ssh_private_key {
         // Mount the SSH key read-only
-        cmd.arg("-v").arg(format!("{}:/root/.ssh/id_rsa:ro", key));
+        cmd.arg("-v").arg(format!("{key}:/root/.ssh/id_rsa:ro"));
     }
 
     cmd.arg(image)
@@ -148,10 +148,7 @@ pub fn docker_exec_shell(container_name: &str, script: &str) -> Result<()> {
     let status = Command::new("docker")
         .args(["exec", container_name, "/bin/bash", "-lc", script])
         .status();
-    let ok = match status {
-        Ok(s) if s.success() => true,
-        _ => false,
-    };
+    let ok = matches!(status, Ok(s) if s.success());
     if ok {
         return Ok(());
     }
@@ -170,10 +167,7 @@ pub fn docker_exec_interactive_shell(container_name: &str) -> Result<()> {
     let status = Command::new("docker")
         .args(["exec", "-it", container_name, "/bin/bash", "-l"])
         .status();
-    let ok = match status {
-        Ok(s) if s.success() => true,
-        _ => false,
-    };
+    let ok = matches!(status, Ok(s) if s.success());
     if ok {
         return Ok(());
     }

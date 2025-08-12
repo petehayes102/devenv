@@ -45,13 +45,11 @@ fn has_gradle_files(root: &Path) -> bool {
 }
 
 fn has_extension(root: &Path, ext: &str) -> bool {
-    for entry in WalkDir::new(root).max_depth(2) {
-        if let Ok(e) = entry {
-            if e.file_type().is_file() {
-                if let Some(e2) = e.path().extension() {
-                    if e2 == ext {
-                        return true;
-                    }
+    for e in WalkDir::new(root).max_depth(2).into_iter().flatten() {
+        if e.file_type().is_file() {
+            if let Some(e2) = e.path().extension() {
+                if e2 == ext {
+                    return true;
                 }
             }
         }
