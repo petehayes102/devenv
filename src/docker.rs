@@ -23,6 +23,24 @@ pub fn docker_build(context_dir: &Path, tag: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn docker_build_with_opts(context_dir: &Path, tag: &str, pull: bool) -> Result<()> {
+    let mut cmd = Command::new("docker");
+    cmd.arg("build");
+    if pull {
+        cmd.arg("--pull");
+    }
+    let status = cmd
+        .arg("-t")
+        .arg(tag)
+        .arg(context_dir)
+        .status()
+        .with_context(|| "Failed to spawn docker build")?;
+    if !status.success() {
+        return Err(anyhow!("docker build failed"));
+    }
+    Ok(())
+}
+
 pub fn docker_ps_devenv() -> Result<Vec<PsItem>> {
     let output = Command::new("docker")
         .args([
@@ -114,7 +132,7 @@ pub fn docker_run_detached(
     container_name: &str,
     image: &str,
     project_dir: &Path,
-    ssh_private_key: Option<&str>,
+    host_ssh_port: Option<u16>,
 ) -> Result<()> {
     let mut cmd = Command::new("docker");
     cmd.arg("run")
@@ -126,9 +144,8 @@ pub fn docker_run_detached(
         .arg("-w")
         .arg("/workspace");
 
-    if let Some(key) = ssh_private_key {
-        // Mount the SSH key read-only
-        cmd.arg("-v").arg(format!("{key}:/root/.ssh/id_rsa:ro"));
+    if let Some(port) = host_ssh_port {
+        cmd.arg("-p").arg(format!("{port}:22"));
     }
 
     cmd.arg(image)
@@ -158,6 +175,33 @@ pub fn docker_exec_shell(container_name: &str, script: &str) -> Result<()> {
         .with_context(|| "Failed to run docker exec")?;
     if !status.success() {
         return Err(anyhow!("docker exec failed"));
+    }
+    Ok(())
+}
+
+pub fn docker_exec_shell_as(container_name: &str, user: &str, script: &str) -> Result<()> {
+    // Try bash, fallback to sh
+    let status = Command::new("docker")
+        .args([
+            "exec",
+            "-u",
+            user,
+            container_name,
+            "/bin/bash",
+            "-lc",
+            script,
+        ])
+        .status();
+    let ok = matches!(status, Ok(s) if s.success());
+    if ok {
+        return Ok(());
+    }
+    let status = Command::new("docker")
+        .args(["exec", "-u", user, container_name, "/bin/sh", "-lc", script])
+        .status()
+        .with_context(|| "Failed to run docker exec -u")?;
+    if !status.success() {
+        return Err(anyhow!("docker exec -u failed"));
     }
     Ok(())
 }
