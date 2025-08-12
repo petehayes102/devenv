@@ -264,7 +264,10 @@ mod tests {
 
     #[test]
     fn dockerfile_includes_from_and_workdir() {
-        let dev = DevEnv { image: "debian:bookworm-slim".into(), ..Default::default() };
+        let dev = DevEnv {
+            image: "debian:bookworm-slim".into(),
+            ..Default::default()
+        };
         let df = generate_dockerfile(&dev);
         assert!(df.contains("FROM debian:bookworm-slim"));
         assert!(df.contains("WORKDIR /workspace"));
