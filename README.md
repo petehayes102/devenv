@@ -76,23 +76,12 @@ ssh_user = "root"        # optional (or set [devenv.user_name])
 Behavior when enabled:
 - Generates an `ed25519` keypair at `./.devenv/zed_ed25519(.pub)` if missing.
 - Appends `/.devenv` to `.gitignore` if present.
-- Builds an image that installs `openssh-server` when `apt-get` is available.
 - Starts the container with port `22` exposed on host `:2222` (override via `ssh_port`).
 - Adds the public key to the container user’s `~/.ssh/authorized_keys` (user order: `zed_remote.ssh_user`, `user_name`, else `root`).
 
 Connect from Zed:
 - Target: `ssh://<user>@localhost:2222/workspace` (replace port/user as configured)
 - Identity file: `./.devenv/zed_ed25519`
-
-Quick test via CLI:
-
-```sh
-ssh -i ./.devenv/zed_ed25519 -p 2222 <user>@localhost 'echo ok'
-```
-
-Notes:
-- For non-Debian base images (e.g. Alpine), `openssh-server` is not auto-installed; use a Debian/Ubuntu base or add SSH server manually.
-- If `ssh-keygen` is unavailable on your host, create keys yourself in `./.devenv/`.
 
 ## Commands
 - `devenv init [<path>]`: Create Dockerfile/config for a project and register it.

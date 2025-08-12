@@ -508,21 +508,6 @@ fn generate_dockerfile(dev: &DevEnv) -> String {
         ));
     }
     lines.push("RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh".into());
-
-    // If Zed remote is enabled, install and prep ssh server where possible
-    if dev.zed_remote.as_ref().map(|z| z.enabled).unwrap_or(false) {
-        lines.push("\n# Zed remote support".into());
-        lines.push(
-            "RUN (command -v apt-get >/dev/null 2>&1 && apt-get update && apt-get install -y openssh-server) || true"
-                .into(),
-        );
-        lines.push("RUN mkdir -p /run/sshd || true".into());
-        lines.push(
-            "RUN if [ -f /etc/ssh/sshd_config ]; then sed -i 's/^#\\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config || true; fi"
-                .into(),
-        );
-    }
-
     lines.push("WORKDIR /workspace".into());
     lines.push("CMD [\"/bin/sh\", \"-lc\", \"tail -f /dev/null\"]".into());
     lines.join("\n")
