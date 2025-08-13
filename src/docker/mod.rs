@@ -1,9 +1,9 @@
-use crate::util::configure_stdio;
+use std::{ffi::OsStr, path::Path, process::Command};
+
 use anyhow::{Context, Result, anyhow};
-use std::ffi::OsStr;
-use std::path::Path;
-use std::process::Command;
 use tracing::info;
+
+pub mod file;
 
 #[derive(Debug, Clone)]
 pub struct PsItem {
@@ -28,7 +28,6 @@ pub fn docker_build_with_opts(
     }
     cmd.arg("-t").arg(tag).arg(context_dir);
     info!("$ {}", format_command_for_log(&cmd));
-    configure_stdio(&mut cmd);
     let status = cmd
         .status()
         .with_context(|| "Failed to spawn docker build")?;
@@ -93,7 +92,6 @@ pub fn docker_start(name: &str) -> Result<()> {
     let mut cmd = Command::new("docker");
     cmd.args(["start", name]);
     info!("$ {}", format_command_for_log(&cmd));
-    configure_stdio(&mut cmd);
     let status = cmd.status().with_context(|| "Failed to run docker start")?;
     if !status.success() {
         return Err(anyhow!("docker start failed"));
@@ -105,7 +103,6 @@ pub fn docker_stop(name: &str) -> Result<()> {
     let mut cmd = Command::new("docker");
     cmd.args(["stop", name]);
     info!("$ {}", format_command_for_log(&cmd));
-    configure_stdio(&mut cmd);
     let status = cmd.status().with_context(|| "Failed to run docker stop")?;
     if !status.success() {
         return Err(anyhow!("docker stop failed"));
@@ -121,7 +118,6 @@ pub fn docker_remove_container(name: &str, force: bool) -> Result<()> {
     }
     cmd.arg(name);
     info!("$ {}", format_command_for_log(&cmd));
-    configure_stdio(&mut cmd);
     let status = cmd.status().with_context(|| "Failed to run docker rm")?;
     if !status.success() {
         return Err(anyhow!("docker rm failed"));
@@ -155,7 +151,6 @@ pub fn docker_run_detached(
         .arg("tail -f /dev/null");
 
     info!("$ {}", format_command_for_log(&cmd));
-    configure_stdio(&mut cmd);
     let status = cmd.status().with_context(|| "Failed to run docker run")?;
     if !status.success() {
         return Err(anyhow!("docker run failed"));
@@ -168,7 +163,6 @@ pub fn docker_exec_shell(container_name: &str, script: &str) -> Result<()> {
     let mut cmd = Command::new("docker");
     cmd.args(["exec", container_name, "/bin/bash", "-lc", script]);
     info!("$ {}", format_command_for_log(&cmd));
-    configure_stdio(&mut cmd);
     let status = cmd.status();
     let ok = matches!(status, Ok(s) if s.success());
     if ok {
@@ -177,7 +171,6 @@ pub fn docker_exec_shell(container_name: &str, script: &str) -> Result<()> {
     let mut cmd = Command::new("docker");
     cmd.args(["exec", container_name, "/bin/sh", "-lc", script]);
     info!("$ {}", format_command_for_log(&cmd));
-    configure_stdio(&mut cmd);
     let status = cmd.status().with_context(|| "Failed to run docker exec")?;
     if !status.success() {
         return Err(anyhow!("docker exec failed"));
@@ -198,7 +191,6 @@ pub fn docker_exec_shell_as(container_name: &str, user: &str, script: &str) -> R
         script,
     ]);
     info!("$ {}", format_command_for_log(&cmd));
-    configure_stdio(&mut cmd);
     let status = cmd.status();
     let ok = matches!(status, Ok(s) if s.success());
     if ok {
@@ -207,7 +199,6 @@ pub fn docker_exec_shell_as(container_name: &str, user: &str, script: &str) -> R
     let mut cmd = Command::new("docker");
     cmd.args(["exec", "-u", user, container_name, "/bin/sh", "-lc", script]);
     info!("$ {}", format_command_for_log(&cmd));
-    configure_stdio(&mut cmd);
     let status = cmd
         .status()
         .with_context(|| "Failed to run docker exec -u")?;
