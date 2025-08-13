@@ -17,10 +17,11 @@ mod detect;
 mod docker;
 mod registry;
 
-fn main() -> Result<()> {
+#[tokio::main(flavor = "multi_thread")]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let _ = tracing_subscriber::fmt()
+    tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
@@ -35,31 +36,37 @@ fn main() -> Result<()> {
         .try_init()
         .map_err(|e| anyhow!(e))?;
 
-    match cli.command {
-        Commands::Init { path } => cmd_init(path),
-        Commands::List => cmd_list(),
-        Commands::Start(args) => cmd_start(
-            args.name.as_deref(),
-            args.open.as_deref(),
-            args.attach,
-            args.rebuild,
-            args.no_build,
-        ),
-        Commands::Stop { name } => cmd_stop(name.as_deref()),
-        Commands::Remove { name } => cmd_remove(name.as_deref()),
-        Commands::Attach { name } => cmd_attach(name.as_deref()),
-        Commands::Restart(args) => cmd_restart(
-            args.name.as_deref(),
-            args.open.as_deref(),
-            args.attach,
-            args.rebuild,
-            args.no_build,
-        ),
-        Commands::Build(args) => cmd_build(args.name.as_deref(), args.rebuild, args.pull),
-    }
+    return match cli.command {
+        Commands::Init { path } => cmd_init(path).await,
+        Commands::List => cmd_list().await,
+        Commands::Start(args) => {
+            cmd_start(
+                args.name.as_deref(),
+                args.open.as_deref(),
+                args.attach,
+                args.rebuild,
+                args.no_build,
+            )
+            .await
+        }
+        Commands::Stop { name } => cmd_stop(name.as_deref()).await,
+        Commands::Remove { name } => cmd_remove(name.as_deref()).await,
+        Commands::Attach { name } => cmd_attach(name.as_deref()).await,
+        Commands::Restart(args) => {
+            cmd_restart(
+                args.name.as_deref(),
+                args.open.as_deref(),
+                args.attach,
+                args.rebuild,
+                args.no_build,
+            )
+            .await
+        }
+        Commands::Build(args) => cmd_build(args.name.as_deref(), args.rebuild, args.pull).await,
+    };
 }
 
-fn cmd_init(path: Option<PathBuf>) -> Result<()> {
+async fn cmd_init(path: Option<PathBuf>) -> Result<()> {
     let project_dir = path.unwrap_or_else(|| std::env::current_dir().unwrap());
     if !project_dir.exists() {
         return Err(anyhow!("Path does not exist: {}", project_dir.display()));
@@ -100,14 +107,14 @@ fn cmd_init(path: Option<PathBuf>) -> Result<()> {
         "Building image '{}' (FROM {})...",
         image_tag, cfg.devenv.image
     );
-    docker::docker_build_with_opts(&project_dir, &image_tag, false, false)?;
+    docker::docker_build_with_opts(&project_dir, &image_tag, false, false).await?;
     info!("Image built: {image_tag}");
 
     Ok(())
 }
 
-fn cmd_list() -> Result<()> {
-    let items = docker::docker_ps_devenv()?;
+async fn cmd_list() -> Result<()> {
+    let items = docker::docker_ps_devenv().await?;
     if items.is_empty() {
         info!("No running dev environments");
     } else {
@@ -118,7 +125,7 @@ fn cmd_list() -> Result<()> {
     Ok(())
 }
 
-fn cmd_start(
+async fn cmd_start(
     name: Option<&str>,
     open_cmd: Option<&str>,
     attach: bool,
@@ -130,7 +137,7 @@ fn cmd_start(
 
     // Check if the environment has already started
     let container_name = format!("devenv-{}", cfg.devenv.name);
-    let running = docker::is_container_running(&container_name)?;
+    let running = docker::is_container_running(&container_name).await?;
     if running {
         info!("Environment '{}' is already running.", cfg.devenv.name);
         return Ok(());
@@ -153,7 +160,7 @@ fn cmd_start(
     // Build image unless user asks us not to
     let image_tag = format!("devenv-{}:latest", cfg.devenv.name);
     if !no_build {
-        docker::docker_build_with_opts(&project_dir, &image_tag, false, rebuild)?;
+        docker::docker_build_with_opts(&project_dir, &image_tag, false, rebuild).await?;
     }
 
     // Determine SSH port if Zed remote is enabled
@@ -170,10 +177,10 @@ fn cmd_start(
                 .and_then(|z| if z.enabled { Some(2222) } else { None })
         });
 
-    if docker::container_exists(&container_name)? {
-        docker::docker_start(&container_name)?;
+    if docker::container_exists(&container_name).await? {
+        docker::docker_start(&container_name).await?;
     } else {
-        docker::docker_run_detached(&container_name, &image_tag, &project_dir, ssh_port)?;
+        docker::docker_run_detached(&container_name, &image_tag, &project_dir, ssh_port).await?;
     }
 
     // Run provisioning commands if any
@@ -195,12 +202,12 @@ fn cmd_start(
             info!("$ {cmd}");
             if cfg.devenv.provision_as_non_root {
                 if let Some(user) = non_root_user.as_deref() {
-                    docker::docker_exec_shell_as(&container_name, user, cmd)?;
+                    docker::docker_exec_shell_as(&container_name, user, cmd).await?;
                 } else {
-                    docker::docker_exec_shell(&container_name, cmd)?;
+                    docker::docker_exec_shell(&container_name, cmd).await?;
                 }
             } else {
-                docker::docker_exec_shell(&container_name, cmd)?;
+                docker::docker_exec_shell(&container_name, cmd).await?;
             }
         }
     }
@@ -210,7 +217,7 @@ fn cmd_start(
         && z.enabled
     {
         let start_sshd = "mkdir -p /run/sshd && (service ssh start || (which /usr/sbin/sshd && /usr/sbin/sshd) || (which sshd && sshd) || true)";
-        let _ = docker::docker_exec_shell(&container_name, start_sshd);
+        let _ = docker::docker_exec_shell(&container_name, start_sshd).await;
     }
 
     // Ensure project-managed keys exist and add to authorized_keys; update .gitignore if present
@@ -241,7 +248,7 @@ fn cmd_start(
             user = user,
             key = key.trim().replace("'", "'\\''"),
         );
-        let _ = docker::docker_exec_shell(&container_name, &script);
+        let _ = docker::docker_exec_shell(&container_name, &script).await;
     }
 
     info!("Environment '{}' started.", cfg.devenv.name);
@@ -251,12 +258,12 @@ fn cmd_start(
         let _ = Command::new(cmd).arg(&target).spawn();
     }
     if attach {
-        return docker::docker_exec_interactive_shell(&container_name);
+        return docker::docker_exec_interactive_shell(&container_name).await;
     }
     Ok(())
 }
 
-fn cmd_stop(name: Option<&str>) -> Result<()> {
+async fn cmd_stop(name: Option<&str>) -> Result<()> {
     let effective_name = if let Some(n) = name {
         n.to_string()
     } else {
@@ -265,12 +272,12 @@ fn cmd_stop(name: Option<&str>) -> Result<()> {
         cfg.devenv.name
     };
     let container_name = format!("devenv-{}", effective_name);
-    if !docker::container_exists(&container_name)? {
+    if !docker::container_exists(&container_name).await? {
         info!("Environment '{}' is not created.", effective_name);
         return Ok(());
     }
-    if docker::is_container_running(&container_name)? {
-        docker::docker_stop(&container_name)?;
+    if docker::is_container_running(&container_name).await? {
+        docker::docker_stop(&container_name).await?;
         info!("Environment '{}' stopped.", effective_name);
     } else {
         info!("Environment '{}' is not running.", effective_name);
@@ -278,7 +285,7 @@ fn cmd_stop(name: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn cmd_attach(name: Option<&str>) -> Result<()> {
+async fn cmd_attach(name: Option<&str>) -> Result<()> {
     let effective_name = if let Some(n) = name {
         n.to_string()
     } else {
@@ -287,10 +294,10 @@ fn cmd_attach(name: Option<&str>) -> Result<()> {
         cfg.devenv.name
     };
     let container_name = format!("devenv-{}", effective_name);
-    if !docker::container_exists(&container_name)? {
+    if !docker::container_exists(&container_name).await? {
         anyhow::bail!("Environment '{}' does not exist.", effective_name);
     }
-    if !docker::is_container_running(&container_name)? {
+    if !docker::is_container_running(&container_name).await? {
         let hint = if let Some(n) = name {
             format!("devenv start {n}")
         } else {
@@ -303,10 +310,10 @@ fn cmd_attach(name: Option<&str>) -> Result<()> {
         );
     }
     info!("Attaching to '{container_name}'... (exit to detach)");
-    docker::docker_exec_interactive_shell(&container_name)
+    docker::docker_exec_interactive_shell(&container_name).await
 }
 
-fn cmd_remove(name: Option<&str>) -> Result<()> {
+async fn cmd_remove(name: Option<&str>) -> Result<()> {
     let effective_name = if let Some(n) = name {
         n.to_string()
     } else {
@@ -315,12 +322,12 @@ fn cmd_remove(name: Option<&str>) -> Result<()> {
         cfg.devenv.name
     };
     let container_name = format!("devenv-{}", effective_name);
-    if docker::container_exists(&container_name)? {
-        if docker::is_container_running(&container_name)? {
-            docker::docker_stop(&container_name)?;
+    if docker::container_exists(&container_name).await? {
+        if docker::is_container_running(&container_name).await? {
+            docker::docker_stop(&container_name).await?;
             info!("Stopped '{container_name}'");
         }
-        docker::docker_remove_container(&container_name, false)?;
+        docker::docker_remove_container(&container_name, false).await?;
         info!("Removed container '{container_name}'");
     } else {
         info!("No container named '{container_name}' found.");
@@ -334,7 +341,7 @@ fn cmd_remove(name: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn cmd_restart(
+async fn cmd_restart(
     name: Option<&str>,
     open_cmd: Option<&str>,
     attach: bool,
@@ -351,11 +358,11 @@ fn cmd_restart(
     };
     let container_name = format!("devenv-{}", effective_name);
     match (
-        docker::container_exists(&container_name)?,
-        docker::is_container_running(&container_name)?,
+        docker::container_exists(&container_name).await?,
+        docker::is_container_running(&container_name).await?,
     ) {
         (true, true) => {
-            docker::docker_stop(&container_name)?;
+            docker::docker_stop(&container_name).await?;
             info!("Environment '{}' stopped.", effective_name);
         }
         (true, false) => {
@@ -371,10 +378,10 @@ fn cmd_restart(
             );
         }
     }
-    cmd_start(name, open_cmd, attach, rebuild, no_build)
+    cmd_start(name, open_cmd, attach, rebuild, no_build).await
 }
 
-fn cmd_build(name: Option<&str>, rebuild: bool, pull: bool) -> Result<()> {
+async fn cmd_build(name: Option<&str>, rebuild: bool, pull: bool) -> Result<()> {
     let path = resolve_env(name)?;
     let cfg = Config::open(&path)?;
 
@@ -393,7 +400,7 @@ fn cmd_build(name: Option<&str>, rebuild: bool, pull: bool) -> Result<()> {
         "Building image '{}' (FROM {})...",
         image_tag, cfg.devenv.image
     );
-    docker::docker_build_with_opts(&path, &image_tag, pull, false)?;
+    docker::docker_build_with_opts(&path, &image_tag, pull, false).await?;
     info!("Image built: {image_tag}");
     Ok(())
 }

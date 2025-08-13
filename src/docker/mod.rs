@@ -1,7 +1,21 @@
-use std::{ffi::OsStr, path::Path, process::Command};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
-use anyhow::{Context, Result, anyhow};
-use tracing::info;
+use anyhow::{Result, anyhow};
+use bollard::models::{ContainerCreateBody, HostConfig, PortBinding};
+use bollard::query_parameters as qp;
+use bollard::{
+    Docker,
+    exec::{CreateExecOptions, ResizeExecOptions, StartExecOptions, StartExecResults},
+};
+use bytes::Bytes;
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use futures_util::StreamExt;
+use http_body_util::{Either, Full};
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
+use walkdir::WalkDir;
 
 pub mod file;
 
@@ -12,233 +26,464 @@ pub struct PsItem {
     pub status: String,
 }
 
-pub fn docker_build_with_opts(
+fn docker_client() -> Result<Docker> {
+    Docker::connect_with_local_defaults().map_err(|e| anyhow!(e))
+}
+
+pub async fn docker_build_with_opts(
     context_dir: &Path,
     tag: &str,
     pull: bool,
     no_cache: bool,
 ) -> Result<()> {
-    let mut cmd = Command::new("docker");
-    cmd.arg("build");
-    if pull {
-        cmd.arg("--pull");
-    }
-    if no_cache {
-        cmd.arg("--no-cache");
-    }
-    cmd.arg("-t").arg(tag).arg(context_dir);
-    info!("$ {}", format_command_for_log(&cmd));
-    let status = cmd
-        .status()
-        .with_context(|| "Failed to spawn docker build")?;
-    if !status.success() {
-        return Err(anyhow!("docker build failed"));
+    let docker = docker_client()?;
+    let tar = create_tar_from_dir(context_dir)?;
+    let opts = qp::BuildImageOptionsBuilder::default()
+        .dockerfile("Dockerfile")
+        .t(tag)
+        .pull(if pull { "true" } else { "false" })
+        .nocache(no_cache)
+        .rm(true)
+        .build();
+    let body = Either::Left(Full::new(Bytes::from(tar)));
+    let mut stream = docker.build_image(opts, None, Some(body));
+    while let Some(_msg) = stream.next().await.transpose().unwrap_or(None) {
+        // We could log build output here if verbose
     }
     Ok(())
 }
 
-pub fn docker_ps_devenv() -> Result<Vec<PsItem>> {
-    let output = Command::new("docker")
-        .args([
-            "ps",
-            "--filter",
-            "name=^/devenv-",
-            "--format",
-            "{{.Names}}\t{{.Image}}\t{{.Status}}",
-        ])
-        .output()
-        .with_context(|| "Failed to run docker ps")?;
-    if !output.status.success() {
-        return Ok(vec![]);
+pub async fn docker_ps_devenv() -> Result<Vec<PsItem>> {
+    let docker = docker_client()?;
+    let mut filters: HashMap<String, Vec<String>> = HashMap::new();
+    filters.insert("name".into(), vec!["devenv-".into()]);
+    let containers = docker
+        .list_containers(Some(qp::ListContainersOptions {
+            all: false,
+            filters: Some(filters),
+            ..Default::default()
+        }))
+        .await?;
+    let mut out = Vec::new();
+    for c in containers {
+        let name = c
+            .names
+            .as_ref()
+            .and_then(|v| v.first())
+            .map(|s| s.trim_start_matches('/').to_string())
+            .unwrap_or_default();
+        let image = c.image.unwrap_or_default();
+        let status = c.status.unwrap_or_default();
+        out.push(PsItem {
+            name,
+            image,
+            status,
+        });
     }
-    let s = String::from_utf8_lossy(&output.stdout);
-    Ok(s.lines()
-        .filter_map(|line| {
-            let mut parts = line.split('\t');
-            Some(PsItem {
-                name: parts.next()?.to_string(),
-                image: parts.next()?.to_string(),
-                status: parts.next().unwrap_or("").to_string(),
-            })
-        })
-        .collect())
+    Ok(out)
 }
 
-pub fn container_exists(name: &str) -> Result<bool> {
-    let output = Command::new("docker")
-        .args(["ps", "-a", "--format", "{{.Names}}"])
-        .output()
-        .with_context(|| "Failed to run docker ps -a")?;
-    if !output.status.success() {
-        return Ok(false);
-    }
-    let s = String::from_utf8_lossy(&output.stdout);
-    Ok(s.lines().any(|n| n.trim() == name))
+pub async fn container_exists(name: &str) -> Result<bool> {
+    let docker = docker_client()?;
+    let mut filters: HashMap<String, Vec<String>> = HashMap::new();
+    filters.insert("name".into(), vec![name.to_string()]);
+    let containers = docker
+        .list_containers(Some(qp::ListContainersOptions {
+            all: true,
+            filters: Some(filters),
+            ..Default::default()
+        }))
+        .await?;
+    Ok(!containers.is_empty())
 }
 
-pub fn is_container_running(name: &str) -> Result<bool> {
-    let output = Command::new("docker")
-        .args(["ps", "--format", "{{.Names}}"])
-        .output()
-        .with_context(|| "Failed to run docker ps")?;
-    if !output.status.success() {
-        return Ok(false);
-    }
-    let s = String::from_utf8_lossy(&output.stdout);
-    Ok(s.lines().any(|n| n.trim() == name))
+pub async fn is_container_running(name: &str) -> Result<bool> {
+    let docker = docker_client()?;
+    let mut filters: HashMap<String, Vec<String>> = HashMap::new();
+    filters.insert("name".into(), vec![name.to_string()]);
+    let containers = docker
+        .list_containers(Some(qp::ListContainersOptions {
+            all: false,
+            filters: Some(filters),
+            ..Default::default()
+        }))
+        .await?;
+    Ok(!containers.is_empty())
 }
 
-pub fn docker_start(name: &str) -> Result<()> {
-    let mut cmd = Command::new("docker");
-    cmd.args(["start", name]);
-    info!("$ {}", format_command_for_log(&cmd));
-    let status = cmd.status().with_context(|| "Failed to run docker start")?;
-    if !status.success() {
-        return Err(anyhow!("docker start failed"));
-    }
+pub async fn docker_start(name: &str) -> Result<()> {
+    let docker = docker_client()?;
+    docker
+        .start_container(name, None::<qp::StartContainerOptions>)
+        .await?;
     Ok(())
 }
 
-pub fn docker_stop(name: &str) -> Result<()> {
-    let mut cmd = Command::new("docker");
-    cmd.args(["stop", name]);
-    info!("$ {}", format_command_for_log(&cmd));
-    let status = cmd.status().with_context(|| "Failed to run docker stop")?;
-    if !status.success() {
-        return Err(anyhow!("docker stop failed"));
-    }
+pub async fn docker_stop(name: &str) -> Result<()> {
+    let docker = docker_client()?;
+    docker
+        .stop_container(name, None::<qp::StopContainerOptions>)
+        .await?;
     Ok(())
 }
 
-pub fn docker_remove_container(name: &str, force: bool) -> Result<()> {
-    let mut cmd = Command::new("docker");
-    cmd.arg("rm");
-    if force {
-        cmd.arg("-f");
-    }
-    cmd.arg(name);
-    info!("$ {}", format_command_for_log(&cmd));
-    let status = cmd.status().with_context(|| "Failed to run docker rm")?;
-    if !status.success() {
-        return Err(anyhow!("docker rm failed"));
-    }
+pub async fn docker_remove_container(name: &str, force: bool) -> Result<()> {
+    let docker = docker_client()?;
+    docker
+        .remove_container(
+            name,
+            Some(qp::RemoveContainerOptions {
+                force,
+                ..Default::default()
+            }),
+        )
+        .await?;
     Ok(())
 }
 
-pub fn docker_run_detached(
+pub async fn docker_run_detached(
     container_name: &str,
     image: &str,
     project_dir: &Path,
     host_ssh_port: Option<u16>,
 ) -> Result<()> {
-    let mut cmd = Command::new("docker");
-    cmd.arg("run")
-        .arg("-d")
-        .arg("--name")
-        .arg(container_name)
-        .arg("-v")
-        .arg(format!("{}:/workspace", project_dir.display()))
-        .arg("-w")
-        .arg("/workspace");
+    let docker = docker_client()?;
 
+    let binds = vec![format!("{}:/workspace", project_dir.display())];
+    let mut port_bindings: HashMap<String, Option<Vec<PortBinding>>> = HashMap::new();
     if let Some(port) = host_ssh_port {
-        cmd.arg("-p").arg(format!("{port}:22"));
+        port_bindings.insert(
+            "22/tcp".into(),
+            Some(vec![PortBinding {
+                host_ip: Some("0.0.0.0".into()),
+                host_port: Some(port.to_string()),
+            }]),
+        );
     }
 
-    cmd.arg(image)
-        .arg("/bin/sh")
-        .arg("-lc")
-        .arg("tail -f /dev/null");
+    let host_config = HostConfig {
+        binds: Some(binds),
+        port_bindings: if port_bindings.is_empty() {
+            None
+        } else {
+            Some(port_bindings)
+        },
+        ..Default::default()
+    };
 
-    info!("$ {}", format_command_for_log(&cmd));
-    let status = cmd.status().with_context(|| "Failed to run docker run")?;
-    if !status.success() {
-        return Err(anyhow!("docker run failed"));
-    }
+    let config = ContainerCreateBody {
+        image: Some(image.to_string()),
+        cmd: Some(vec![
+            "/bin/sh".into(),
+            "-lc".into(),
+            "tail -f /dev/null".into(),
+        ]),
+        working_dir: Some("/workspace".into()),
+        host_config: Some(host_config),
+        ..Default::default()
+    };
+
+    let _ = docker
+        .create_container(
+            Some(qp::CreateContainerOptions {
+                name: Some(container_name.to_string()),
+                ..Default::default()
+            }),
+            config,
+        )
+        .await?;
+
+    docker
+        .start_container(container_name, None::<qp::StartContainerOptions>)
+        .await?;
+
     Ok(())
 }
 
-pub fn docker_exec_shell(container_name: &str, script: &str) -> Result<()> {
-    // Try bash, fallback to sh
-    let mut cmd = Command::new("docker");
-    cmd.args(["exec", container_name, "/bin/bash", "-lc", script]);
-    info!("$ {}", format_command_for_log(&cmd));
-    let status = cmd.status();
-    let ok = matches!(status, Ok(s) if s.success());
-    if ok {
+pub async fn docker_exec_shell(container_name: &str, script: &str) -> Result<()> {
+    let docker = docker_client()?;
+    // Try bash first
+    if exec_and_wait(&docker, container_name, None, &["/bin/bash", "-lc", script]).await? {
         return Ok(());
     }
-    let mut cmd = Command::new("docker");
-    cmd.args(["exec", container_name, "/bin/sh", "-lc", script]);
-    info!("$ {}", format_command_for_log(&cmd));
-    let status = cmd.status().with_context(|| "Failed to run docker exec")?;
-    if !status.success() {
-        return Err(anyhow!("docker exec failed"));
+    // Fallback to sh
+    if exec_and_wait(&docker, container_name, None, &["/bin/sh", "-lc", script]).await? {
+        return Ok(());
     }
-    Ok(())
+    Err(anyhow!("docker exec failed"))
 }
 
-pub fn docker_exec_shell_as(container_name: &str, user: &str, script: &str) -> Result<()> {
-    // Try bash, fallback to sh
-    let mut cmd = Command::new("docker");
-    cmd.args([
-        "exec",
-        "-u",
-        user,
+pub async fn docker_exec_shell_as(container_name: &str, user: &str, script: &str) -> Result<()> {
+    let docker = docker_client()?;
+    // Try bash first
+    if exec_and_wait(
+        &docker,
         container_name,
-        "/bin/bash",
-        "-lc",
-        script,
-    ]);
-    info!("$ {}", format_command_for_log(&cmd));
-    let status = cmd.status();
-    let ok = matches!(status, Ok(s) if s.success());
-    if ok {
+        Some(user),
+        &["/bin/bash", "-lc", script],
+    )
+    .await?
+    {
         return Ok(());
     }
-    let mut cmd = Command::new("docker");
-    cmd.args(["exec", "-u", user, container_name, "/bin/sh", "-lc", script]);
-    info!("$ {}", format_command_for_log(&cmd));
-    let status = cmd
-        .status()
-        .with_context(|| "Failed to run docker exec -u")?;
-    if !status.success() {
-        return Err(anyhow!("docker exec -u failed"));
-    }
-    Ok(())
-}
-
-pub fn docker_exec_interactive_shell(container_name: &str) -> Result<()> {
-    // Try bash login shell first
-    let status = Command::new("docker")
-        .args(["exec", "-it", container_name, "/bin/bash", "-l"])
-        .status();
-    let ok = matches!(status, Ok(s) if s.success());
-    if ok {
+    // Fallback to sh
+    if exec_and_wait(
+        &docker,
+        container_name,
+        Some(user),
+        &["/bin/sh", "-lc", script],
+    )
+    .await?
+    {
         return Ok(());
     }
-    // Fallback to sh login shell
-    let status = Command::new("docker")
-        .args(["exec", "-it", container_name, "/bin/sh", "-l"])
-        .status()
-        .with_context(|| "Failed to run docker exec -it")?;
-    if !status.success() {
-        return Err(anyhow!("failed to attach interactive shell"));
-    }
-    Ok(())
+    Err(anyhow!("docker exec -u failed"))
 }
 
-fn format_command_for_log(cmd: &Command) -> String {
-    let prog = cmd.get_program().to_string_lossy();
-    let args = cmd.get_args().map(quote_arg).collect::<Vec<_>>().join(" ");
-    format!("{} {}", prog, args)
+pub async fn docker_exec_interactive_shell(container_name: &str) -> Result<()> {
+    let docker = docker_client()?;
+    if exec_interactive(&docker, container_name, None, &["/bin/bash", "-l"]).await? {
+        return Ok(());
+    }
+    // Fallback to sh
+    if exec_interactive(&docker, container_name, None, &["/bin/sh", "-l"]).await? {
+        return Ok(());
+    }
+    Err(anyhow!("failed to attach interactive shell"))
 }
 
-fn quote_arg<S: AsRef<OsStr>>(s: S) -> String {
-    let s = s.as_ref().to_string_lossy();
-    if s.contains(' ') || s.contains('"') || s.contains('\'') {
-        format!("\"{}\"", s.replace('"', "\\\""))
-    } else {
-        s.into_owned()
+async fn exec_and_wait(
+    docker: &Docker,
+    container_name: &str,
+    user: Option<&str>,
+    cmd: &[&str],
+) -> Result<bool> {
+    let exec = docker
+        .create_exec(
+            container_name,
+            CreateExecOptions {
+                attach_stdout: Some(true),
+                attach_stderr: Some(true),
+                cmd: Some(cmd.iter().map(|s| s.to_string()).collect()),
+                user: user.map(|u| u.to_string()),
+                ..Default::default()
+            },
+        )
+        .await?;
+    match docker
+        .start_exec(
+            &exec.id,
+            Some(StartExecOptions {
+                detach: false,
+                tty: false,
+                ..Default::default()
+            }),
+        )
+        .await?
+    {
+        StartExecResults::Detached => {}
+        StartExecResults::Attached { mut output, .. } => {
+            while let Some(chunk) = output.next().await {
+                if let Ok(log) = chunk {
+                    use bollard::container::LogOutput;
+                    match log {
+                        LogOutput::StdOut { message } | LogOutput::StdErr { message } => {
+                            let _ = std::io::Write::write_all(&mut std::io::stdout(), &message);
+                            let _ = std::io::Write::flush(&mut std::io::stdout());
+                        }
+                        LogOutput::Console { message } => {
+                            let _ = std::io::Write::write_all(&mut std::io::stdout(), &message);
+                            let _ = std::io::Write::flush(&mut std::io::stdout());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
     }
+    let inspected = docker.inspect_exec(&exec.id).await?;
+    Ok(matches!(inspected.exit_code, Some(0)))
+}
+
+async fn exec_interactive(
+    docker: &Docker,
+    container_name: &str,
+    user: Option<&str>,
+    cmd: &[&str],
+) -> Result<bool> {
+    let _raw_mode = RawModeGuard::enable()?;
+    let exec = docker
+        .create_exec(
+            container_name,
+            CreateExecOptions {
+                attach_stdout: Some(true),
+                attach_stderr: Some(true),
+                attach_stdin: Some(true),
+                tty: Some(true),
+                cmd: Some(cmd.iter().map(|s| s.to_string()).collect()),
+                user: user.map(|u| u.to_string()),
+                ..Default::default()
+            },
+        )
+        .await?;
+    if let StartExecResults::Attached { mut output, input } = docker
+        .start_exec(
+            &exec.id,
+            Some(StartExecOptions {
+                detach: false,
+                tty: true,
+                ..Default::default()
+            }),
+        )
+        .await?
+    {
+        // Initial resize to current terminal size (best-effort)
+        if let Ok((cols, rows)) = crossterm::terminal::size() {
+            let _ = docker
+                .resize_exec(
+                    &exec.id,
+                    ResizeExecOptions {
+                        height: rows,
+                        width: cols,
+                    },
+                )
+                .await;
+        }
+
+        // Watch for window size changes and resize TTY
+        #[cfg(unix)]
+        let resize_handle = {
+            let docker = docker.clone();
+            let exec_id = exec.id.clone();
+            tokio::spawn(async move {
+                if let Ok(mut sig) =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
+                {
+                    while sig.recv().await.is_some() {
+                        if let Ok((cols, rows)) = crossterm::terminal::size() {
+                            let _ = docker
+                                .resize_exec(
+                                    &exec_id,
+                                    ResizeExecOptions {
+                                        height: rows,
+                                        width: cols,
+                                    },
+                                )
+                                .await;
+                        }
+                    }
+                }
+            })
+        };
+
+        #[cfg(windows)]
+        let resize_handle = {
+            use tokio::time::{Duration, sleep};
+            let docker = docker.clone();
+            let exec_id = exec.id.clone();
+            tokio::spawn(async move {
+                let mut last = (0u16, 0u16);
+                loop {
+                    if let Ok((cols, rows)) = crossterm::terminal::size() {
+                        if (cols, rows) != last {
+                            let _ = docker
+                                .resize_exec(
+                                    &exec_id,
+                                    ResizeExecOptions {
+                                        height: rows,
+                                        width: cols,
+                                    },
+                                )
+                                .await;
+                            last = (cols, rows);
+                        }
+                    }
+                    sleep(Duration::from_millis(250)).await;
+                }
+            })
+        };
+
+        // Pipe stdout/err from container to local stdout
+        let out_task = tokio::spawn(async move {
+            let mut stdout = io::stdout();
+            while let Some(chunk) = output.next().await {
+                if let Ok(log) = chunk {
+                    use bollard::container::LogOutput;
+                    match log {
+                        LogOutput::StdOut { message }
+                        | LogOutput::StdErr { message }
+                        | LogOutput::Console { message } => {
+                            let _ = stdout.write_all(&message).await;
+                            let _ = stdout.flush().await;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        });
+
+        // Pipe local stdin to container input if available
+        let in_task = tokio::spawn(async move {
+            let mut input = input;
+            let mut stdin = io::stdin();
+            let mut buf = [0u8; 1024];
+            loop {
+                match stdin.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if input.write_all(&buf[..n]).await.is_err() {
+                            break;
+                        }
+                        let _ = input.flush().await;
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let _ = tokio::try_join!(out_task, in_task);
+        // Stop resize watcher
+        resize_handle.abort();
+    }
+
+    let inspected = docker.inspect_exec(&exec.id).await?;
+    Ok(matches!(inspected.exit_code, Some(0)))
+}
+
+struct RawModeGuard;
+
+impl RawModeGuard {
+    fn enable() -> Result<Self> {
+        enable_raw_mode().map_err(|e| anyhow!(e))?;
+        Ok(Self)
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+    }
+}
+
+fn create_tar_from_dir(dir: &Path) -> Result<Vec<u8>> {
+    let mut ar = tar::Builder::new(Vec::<u8>::new());
+    let base = dir;
+    for entry in WalkDir::new(dir).into_iter().filter_map(Result::ok) {
+        let path = entry.path();
+        let rel = match path.strip_prefix(base) {
+            Ok(p) if p.as_os_str().is_empty() => PathBuf::from("."),
+            Ok(p) => p.to_path_buf(),
+            Err(_) => PathBuf::from("."),
+        };
+        if rel.as_os_str().is_empty() {
+            continue;
+        }
+        if path.is_dir() {
+            ar.append_dir(rel, path)?;
+        } else if path.is_file() {
+            ar.append_path_with_name(path, rel)?;
+        }
+    }
+    let data = ar.into_inner()?;
+    Ok(data)
 }

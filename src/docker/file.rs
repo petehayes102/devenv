@@ -82,12 +82,8 @@ impl Dockerfile {
             Data::String(os.package_inst().into()),
         );
 
-        let mut pkgs: Vec<String> = os
-            .base_packages()
-            .into_iter()
-            .map(|s| (*s).into())
-            .collect();
-        packages.into_iter().for_each(|pkg| pkgs.push(pkg.into()));
+        let mut pkgs: Vec<String> = os.base_packages().iter().map(|s| (*s).into()).collect();
+        packages.iter().for_each(|pkg| pkgs.push(pkg.into()));
         data.insert("packages".into(), to_data(pkgs).unwrap());
 
         // @todo
@@ -117,7 +113,7 @@ impl Dockerfile {
     }
 
     pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
-        fs::write(&make_path(path), &self.0)?;
+        fs::write(make_path(path), &self.0)?;
         Ok(())
     }
 }
