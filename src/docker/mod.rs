@@ -86,12 +86,10 @@ impl DockerClient {
                 .and_then(|v| v.first())
                 .map(|s| s.trim_start_matches('/').to_string())
                 .unwrap_or_default();
-            let image = c.image.unwrap_or_default();
-            let status = c.status.unwrap_or_default();
             out.push(PsItem {
                 name,
-                image,
-                status,
+                image: c.image.unwrap_or_default(),
+                status: c.status.unwrap_or_default(),
             });
         }
         Ok(out)
@@ -186,7 +184,7 @@ impl DockerClient {
             cmd: Some(vec![
                 "/bin/sh".into(),
                 "-lc".into(),
-                "tail -f /dev/null".into(),
+                "sleep infinity".into(),
             ]),
             working_dir: Some("/workspace".into()),
             host_config: Some(host_config),
@@ -225,7 +223,7 @@ impl DockerClient {
         {
             return Ok(());
         }
-        bail!("docker exec failed")
+        bail!("`docker exec` failed")
     }
 
     pub async fn exec_shell_as(
@@ -248,7 +246,7 @@ impl DockerClient {
         {
             return Ok(());
         }
-        bail!("docker exec -u failed")
+        bail!("`docker exec -u` failed")
     }
 
     pub async fn exec_interactive_shell(&self, container_name: &str) -> Result<()> {
@@ -345,7 +343,10 @@ impl DockerClient {
                 },
             )
             .await?;
-        if let StartExecResults::Attached { mut output, input } = self
+        if let StartExecResults::Attached {
+            mut output,
+            mut input,
+        } = self
             .0
             .start_exec(
                 &exec.id,
@@ -445,7 +446,6 @@ impl DockerClient {
 
             // Pipe local stdin to container input if available
             let in_task = tokio::spawn(async move {
-                let mut input = input;
                 let mut stdin = io::stdin();
                 let mut buf = [0u8; 1024];
                 loop {

@@ -20,7 +20,7 @@ mod detect;
 mod docker;
 mod registry;
 
-#[tokio::main(flavor = "multi_thread")]
+#[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
