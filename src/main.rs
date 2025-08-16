@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf, process::Command};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use clap::Parser;
 use tracing::{Level, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -72,7 +72,7 @@ async fn main() -> Result<()> {
 async fn cmd_init(path: Option<PathBuf>) -> Result<()> {
     let project_dir = path.unwrap_or_else(|| std::env::current_dir().unwrap());
     if !project_dir.exists() {
-        return Err(anyhow!("Path does not exist: {}", project_dir.display()));
+        bail!("Path does not exist: {}", project_dir.display());
     }
 
     // Create devenv.toml
