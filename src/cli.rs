@@ -61,3 +61,48 @@ pub struct BuildArgs {
     #[arg(long)]
     pub pull: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_start_open_default_and_flags() {
+        let cli = Cli::parse_from(["devenv", "start", "--open"]);
+        match cli.command {
+            Commands::Start(args) => {
+                assert_eq!(args.open.as_deref(), Some("zed"));
+                assert!(!args.attach);
+                assert!(!args.rebuild);
+                assert!(!args.no_build);
+                assert!(args.name.is_none());
+            }
+            _ => panic!("expected start"),
+        }
+    }
+
+    #[test]
+    fn parses_start_open_explicit_command() {
+        let cli = Cli::parse_from(["devenv", "start", "--open", "code", "myenv"]);
+        match cli.command {
+            Commands::Start(args) => {
+                assert_eq!(args.open.as_deref(), Some("code"));
+                assert_eq!(args.name.as_deref(), Some("myenv"));
+            }
+            _ => panic!("expected start"),
+        }
+    }
+
+    #[test]
+    fn parses_build_with_pull_and_rebuild() {
+        let cli = Cli::parse_from(["devenv", "build", "--pull", "--rebuild", "proj"]);
+        match cli.command {
+            Commands::Build(args) => {
+                assert!(args.pull);
+                assert!(args.rebuild);
+                assert_eq!(args.name.as_deref(), Some("proj"));
+            }
+            _ => panic!("expected build"),
+        }
+    }
+}

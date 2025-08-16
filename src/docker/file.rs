@@ -124,3 +124,45 @@ fn make_path(path: impl AsRef<Path>) -> PathBuf {
         _ => path.as_ref().join(FILENAME),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn creates_expected_dockerfile_contents() {
+        let extra = vec!["htop".to_string(), "ripgrep".to_string()];
+        let df = Dockerfile::create("debian:bookworm", &extra, OsFamily::Debian).unwrap();
+        let s = df.0;
+        assert!(s.contains("FROM debian:bookworm"));
+        // Base packages + extras in single line
+        assert!(s.contains("RUN apt install -y curl ca-certificates git sudo htop ripgrep"));
+        assert!(s.contains("CMD [\"sleep\", \"infinity\"]"));
+    }
+
+    #[test]
+    fn equality_depends_on_rendered_contents() {
+        let df1 = Dockerfile::create("img", &[], OsFamily::Debian).unwrap();
+        let df2 = Dockerfile::create("img", &[], OsFamily::Debian).unwrap();
+        let df3 = Dockerfile::create("img", &["vim".to_string()], OsFamily::Debian).unwrap();
+        assert_eq!(df1, df2);
+        assert_ne!(df1, df3);
+    }
+
+    #[test]
+    fn write_and_open_roundtrip_and_exists() {
+        let td = TempDir::new().unwrap();
+        let df = Dockerfile::create("base", &[], OsFamily::Debian).unwrap();
+        assert!(!Dockerfile::exists(td.path()));
+        df.write(td.path()).unwrap();
+        assert!(Dockerfile::exists(td.path()));
+        let read = Dockerfile::open(td.path()).unwrap();
+        assert_eq!(df, read);
+
+        // Also check passing full file path works
+        let file_path = td.path().join(FILENAME);
+        let read2 = Dockerfile::open(&file_path).unwrap();
+        assert_eq!(df, read2);
+    }
+}

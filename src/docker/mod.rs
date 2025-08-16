@@ -507,3 +507,39 @@ fn create_tar_from_dir(dir: &Path) -> Result<Vec<u8>> {
     let data = ar.into_inner()?;
     Ok(data)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+    use tempfile::TempDir;
+
+    fn norm(p: &std::path::Path) -> String {
+        let s = p.to_string_lossy();
+        s.strip_prefix("./").unwrap_or(&s).to_string()
+    }
+
+    #[test]
+    fn tar_includes_files_and_directories() {
+        let td = TempDir::new().unwrap();
+        let root = td.path();
+        std::fs::write(root.join("root.txt"), "hi").unwrap();
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/inner.txt"), "ok").unwrap();
+
+        let tar_bytes = create_tar_from_dir(root).unwrap();
+        assert!(!tar_bytes.is_empty());
+
+        let mut archive = tar::Archive::new(Cursor::new(tar_bytes));
+        let mut names = std::collections::HashSet::new();
+        for entry in archive.entries().unwrap() {
+            let e = entry.unwrap();
+            let path = e.path().unwrap();
+            names.insert(norm(&path));
+        }
+        assert!(names.contains("."), "should contain base dir entry");
+        assert!(names.contains("root.txt"));
+        assert!(names.contains("sub"));
+        assert!(names.contains("sub/inner.txt"));
+    }
+}

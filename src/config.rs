@@ -103,3 +103,56 @@ fn make_path(path: impl AsRef<Path>) -> PathBuf {
         _ => path.as_ref().join(FILENAME),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn exists_and_open_work_with_dir_and_file_paths() {
+        let td = TempDir::new().unwrap();
+        // Initially, no config exists
+        assert!(!Config::exists(td.path()));
+        // Create minimal config file
+        let cfg_path = td.path().join(FILENAME);
+        let content = r#"[devenv]
+name = "sample"
+image = "debian:bookworm-slim"
+packages = []
+commands = []
+provision_as_non_root = false
+"#;
+        std::fs::write(&cfg_path, content).unwrap();
+        assert!(Config::exists(td.path()));
+        // Can open via directory or full file path
+        let a = Config::open(td.path()).unwrap();
+        let b = Config::open(&cfg_path).unwrap();
+        assert_eq!(a.devenv.name, "sample");
+        assert_eq!(b.devenv.image, "debian:bookworm-slim");
+    }
+
+    #[test]
+    fn create_sets_defaults_and_detects_image() {
+        let td = TempDir::new().unwrap();
+        let dir = td.path().join("myproj");
+        std::fs::create_dir_all(&dir).unwrap();
+        // No recognizable files -> default image
+        let cfg = Config::create(&dir).unwrap();
+        assert_eq!(cfg.devenv.name, "myproj");
+        assert_eq!(cfg.devenv.image, "debian:bookworm-slim");
+        assert!(cfg.devenv.packages.is_empty());
+        assert!(cfg.devenv.commands.is_empty());
+        assert!(!cfg.devenv.provision_as_non_root);
+        assert!(cfg.path.exists());
+
+        // Recognizable language file -> detected image
+        let dir2 = td.path().join("rustproj");
+        std::fs::create_dir_all(&dir2).unwrap();
+        std::fs::write(dir2.join("Cargo.toml"), "[package]\nname='x'\n").unwrap();
+        let cfg2 = Config::create(&dir2).unwrap();
+        assert_eq!(cfg2.devenv.name, "rustproj");
+        assert_eq!(cfg2.devenv.image, "rust:trixie");
+        assert_eq!(cfg2.path, dir2.join(FILENAME));
+    }
+}

@@ -482,3 +482,33 @@ fn update_project_gitignore(project_dir: &std::path::Path) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn updates_gitignore_idempotently() {
+        let td = TempDir::new().unwrap();
+        let gi = td.path().join(".gitignore");
+        std::fs::write(&gi, "target/\n").unwrap();
+
+        update_project_gitignore(td.path()).unwrap();
+        let content = std::fs::read_to_string(&gi).unwrap();
+        assert!(content.lines().any(|l| l.trim() == "/.devenv"));
+
+        // Calling again should not duplicate the entry
+        update_project_gitignore(td.path()).unwrap();
+        let content2 = std::fs::read_to_string(&gi).unwrap();
+        assert_eq!(content, content2);
+    }
+
+    #[test]
+    fn no_gitignore_is_ok() {
+        let td = TempDir::new().unwrap();
+        // Should be a no-op when .gitignore is absent
+        update_project_gitignore(td.path()).unwrap();
+        assert!(!td.path().join(".gitignore").exists());
+    }
+}
